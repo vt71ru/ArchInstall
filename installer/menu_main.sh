@@ -5,40 +5,35 @@
 #------------------------------------------------------------
 #  menu_main.sh
 #
-#  Главное меню установщика.
+#  Main installer menu.
 #
-#  Ответственность:
-#   • Отображение меню
-#   • Навигация
-#   • Запуск подготовительных модулей
-#   • Контроль порядка установки
-#   • Контроль состояния стадий
-#   • Обработка ошибок без выхода из меню
+#  Workflow:
 #
-#  Критическая цепочка:
-#
-#   disks
-#     ↓
-#   partition
-#     ↓
-#   filesystem
-#     ↓
-#   mount
-#     ↓
-#   packages_install
-#     ↓
-#   locale_generate
-#     ↓
-#   users
-#     ↓
-#   desktop
-#     ↓
-#   services
-#     ↓
-#   bootloader
-#     ↓
-#   summary
-#
+#    network
+#      |
+#    mirrors
+#      |
+#    disks
+#      |
+#    partition
+#      |
+#    filesystem
+#      |
+#    mount
+#      |
+#    packages_install
+#      |
+#    locale_generate
+#      |
+#    users
+#      |
+#    desktop
+#      |
+#    services
+#      |
+#    bootloader
+#      |
+#    summary
 #============================================================
 
 [[ -n "${MENU_MAIN_SH_LOADED:-}" ]] && return
@@ -56,6 +51,8 @@ MENU_EXIT_REQUESTED=0
 # Stage state
 #------------------------------------------------------------
 
+MENU_STAGE_NETWORK=0
+MENU_STAGE_MIRRORS=0
 MENU_STAGE_DISK=0
 MENU_STAGE_PARTITION=0
 MENU_STAGE_FILESYSTEM=0
@@ -101,7 +98,7 @@ MENU_ACTIONS=(
     "disks"
     "partition"
     "filesystem"
-    "mount"
+    "mount_system"
     "packages_install"
     "locale_generate"
     "users"
@@ -123,6 +120,96 @@ menu_main_clear_screen()
 }
 
 #------------------------------------------------------------
+# Reset stage state
+#------------------------------------------------------------
+
+menu_main_reset_stage_state()
+{
+    MENU_STAGE_NETWORK=0
+    MENU_STAGE_MIRRORS=0
+    MENU_STAGE_DISK=0
+    MENU_STAGE_PARTITION=0
+    MENU_STAGE_FILESYSTEM=0
+    MENU_STAGE_MOUNT=0
+    MENU_STAGE_PACKAGES=0
+    MENU_STAGE_LOCALE=0
+    MENU_STAGE_USERS=0
+    MENU_STAGE_DESKTOP=0
+    MENU_STAGE_SERVICES=0
+    MENU_STAGE_BOOTLOADER=0
+    MENU_STAGE_SUMMARY=0
+}
+
+#------------------------------------------------------------
+# Check network state without displaying dialogs
+#------------------------------------------------------------
+
+menu_main_network_ready()
+{
+    local iface
+    local address
+
+    iface="$(
+        config_get NETWORK_INTERFACE \
+            2>/dev/null \
+            || true
+    )"
+
+    [[ -n "$iface" ]] || \
+        return 1
+
+    [[ -e "/sys/class/net/${iface}" ]] || \
+        return 1
+
+    address="$(
+        network_ip \
+            "$iface" \
+            2>/dev/null \
+            || true
+    )"
+
+    [[ -n "$address" ]] || \
+        return 1
+
+    ip \
+        route \
+        get \
+        1.1.1.1 \
+        >/dev/null \
+        2>&1 || \
+        return 1
+
+    getent \
+        hosts \
+        archlinux.org \
+        >/dev/null \
+        2>&1 || \
+        return 1
+
+    return 0
+}
+
+#------------------------------------------------------------
+# Check mirrorlist state without displaying dialogs
+#------------------------------------------------------------
+
+menu_main_mirrorlist_ready()
+{
+    local mirrorlist="/etc/pacman.d/mirrorlist"
+
+    [[ -f "$mirrorlist" ]] || \
+        return 1
+
+    [[ -s "$mirrorlist" ]] || \
+        return 1
+
+    grep \
+        -Eq \
+        '^[[:space:]]*Server[[:space:]]*=' \
+        "$mirrorlist"
+}
+
+#------------------------------------------------------------
 # Get stage status
 #------------------------------------------------------------
 
@@ -131,39 +218,84 @@ menu_main_stage_status()
     local action="$1"
 
     case "$action" in
+        network)
+            (( MENU_STAGE_NETWORK )) && \
+                printf '[OK]' || \
+                printf '[--]'
+            ;;
+
+        mirrors)
+            (( MENU_STAGE_MIRRORS )) && \
+                printf '[OK]' || \
+                printf '[--]'
+            ;;
+
         disks)
-            (( MENU_STAGE_DISK )) && printf '[OK]' || printf '[--]'
+            (( MENU_STAGE_DISK )) && \
+                printf '[OK]' || \
+                printf '[--]'
             ;;
+
         partition)
-            (( MENU_STAGE_PARTITION )) && printf '[OK]' || printf '[--]'
+            (( MENU_STAGE_PARTITION )) && \
+                printf '[OK]' || \
+                printf '[--]'
             ;;
+
         filesystem)
-            (( MENU_STAGE_FILESYSTEM )) && printf '[OK]' || printf '[--]'
+            (( MENU_STAGE_FILESYSTEM )) && \
+                printf '[OK]' || \
+                printf '[--]'
             ;;
-        mount)
-            (( MENU_STAGE_MOUNT )) && printf '[OK]' || printf '[--]'
+
+        mount_system)
+            (( MENU_STAGE_MOUNT )) && \
+                printf '[OK]' || \
+                printf '[--]'
             ;;
+
         packages_install)
-            (( MENU_STAGE_PACKAGES )) && printf '[OK]' || printf '[--]'
+            (( MENU_STAGE_PACKAGES )) && \
+                printf '[OK]' || \
+                printf '[--]'
             ;;
+
         locale_generate)
-            (( MENU_STAGE_LOCALE )) && printf '[OK]' || printf '[--]'
+            (( MENU_STAGE_LOCALE )) && \
+                printf '[OK]' || \
+                printf '[--]'
             ;;
+
         users)
-            (( MENU_STAGE_USERS )) && printf '[OK]' || printf '[--]'
+            (( MENU_STAGE_USERS )) && \
+                printf '[OK]' || \
+                printf '[--]'
             ;;
+
         desktop)
-            (( MENU_STAGE_DESKTOP )) && printf '[OK]' || printf '[--]'
+            (( MENU_STAGE_DESKTOP )) && \
+                printf '[OK]' || \
+                printf '[--]'
             ;;
+
         services)
-            (( MENU_STAGE_SERVICES )) && printf '[OK]' || printf '[--]'
+            (( MENU_STAGE_SERVICES )) && \
+                printf '[OK]' || \
+                printf '[--]'
             ;;
+
         bootloader)
-            (( MENU_STAGE_BOOTLOADER )) && printf '[OK]' || printf '[--]'
+            (( MENU_STAGE_BOOTLOADER )) && \
+                printf '[OK]' || \
+                printf '[--]'
             ;;
+
         summary)
-            (( MENU_STAGE_SUMMARY )) && printf '[OK]' || printf '[--]'
+            (( MENU_STAGE_SUMMARY )) && \
+                printf '[OK]' || \
+                printf '[--]'
             ;;
+
         *)
             printf '   '
             ;;
@@ -176,45 +308,126 @@ menu_main_stage_status()
 
 menu_main_refresh_state()
 {
+    local root_part
+    local root_type
+    local filesystem
+    local user_name
+    local desktop
+    local mirrorlist
+
+    menu_main_reset_stage_state
+
+    #--------------------------------------------------------
+    # Network
+    #--------------------------------------------------------
+
+    if menu_main_network_ready
+    then
+        MENU_STAGE_NETWORK=1
+    fi
+
+    #--------------------------------------------------------
+    # Mirrors
+    #--------------------------------------------------------
+
+    if menu_main_network_ready &&
+       menu_main_mirrorlist_ready
+    then
+        MENU_STAGE_MIRRORS=1
+    fi
+
+    #--------------------------------------------------------
+    # Disk
+    #--------------------------------------------------------
+
     if config_has_target_disk
     then
         MENU_STAGE_DISK=1
     fi
+
+    #--------------------------------------------------------
+    # Partition
+    #--------------------------------------------------------
 
     if config_has_root
     then
         MENU_STAGE_PARTITION=1
     fi
 
-    if [[ -b "$(config_get ROOT_PART)" ]]
-    then
-        local root_type
+    #--------------------------------------------------------
+    # Filesystem
+    #--------------------------------------------------------
 
+    root_part="$(
+        config_get ROOT_PART \
+            2>/dev/null \
+            || true
+    )"
+
+    filesystem="$(
+        config_get FILESYSTEM \
+            2>/dev/null \
+            || true
+    )"
+
+    if [[ -b "$root_part" ]]
+    then
         root_type="$(
             blkid \
+                -p \
                 -s TYPE \
                 -o value \
-                "$(config_get ROOT_PART)" \
+                "$root_part" \
                 2>/dev/null \
                 || true
         )"
 
-        if [[ -n "$root_type" ]]
+        if [[ -n "$filesystem" &&
+              "$root_type" == "$filesystem" ]]
         then
             MENU_STAGE_FILESYSTEM=1
         fi
     fi
 
+    #--------------------------------------------------------
+    # Mount
+    #--------------------------------------------------------
+
     if mountpoint -q /mnt
     then
         MENU_STAGE_MOUNT=1
+
+        if [[ "$(config_get CREATE_HOME)" == "1" ]]
+        then
+            if ! mountpoint -q /mnt/home
+            then
+                MENU_STAGE_MOUNT=0
+            fi
+        fi
+
+        if [[ "$(config_get BOOT_MODE)" == "UEFI" ]]
+        then
+            if ! mountpoint -q /mnt/boot/efi
+            then
+                MENU_STAGE_MOUNT=0
+            fi
+        fi
     fi
 
+    #--------------------------------------------------------
+    # Packages
+    #--------------------------------------------------------
+
     if [[ -x /mnt/usr/bin/bash &&
-          -f /mnt/etc/fstab ]]
+          -f /mnt/etc/fstab &&
+          -d /mnt/var/lib/pacman/local ]]
     then
         MENU_STAGE_PACKAGES=1
     fi
+
+    #--------------------------------------------------------
+    # Locale
+    #--------------------------------------------------------
 
     if [[ -f /mnt/etc/locale.conf &&
           -f /mnt/etc/vconsole.conf ]]
@@ -222,85 +435,140 @@ menu_main_refresh_state()
         MENU_STAGE_LOCALE=1
     fi
 
+    #--------------------------------------------------------
+    # Users
+    #--------------------------------------------------------
+
     if [[ -v "CONFIG[USER_NAME]" ]]
     then
-        local user_name
-
-        user_name="$(config_get USER_NAME)"
+        user_name="$(
+            config_get USER_NAME \
+                2>/dev/null \
+                || true
+        )"
 
         if [[ -n "$user_name" &&
               -f /mnt/etc/passwd ]]
         then
             if arch-chroot \
                 /mnt \
-                getent passwd \
+                getent \
+                passwd \
                 "$user_name" \
-                >/dev/null 2>&1
+                >/dev/null \
+                2>&1
             then
                 MENU_STAGE_USERS=1
             fi
         fi
     fi
 
-    if [[ -n "$(config_get DESKTOP)" ]]
+    #--------------------------------------------------------
+    # Desktop
+    #--------------------------------------------------------
+
+    desktop="$(
+        config_get DESKTOP \
+            2>/dev/null \
+            || true
+    )"
+
+    if [[ -z "$desktop" ]]
     then
-        case "$(config_get DESKTOP)" in
+        MENU_STAGE_DESKTOP=1
+    else
+        case "$desktop" in
             gnome)
                 if arch-chroot \
                     /mnt \
                     systemctl \
                     is-enabled \
                     gdm.service \
-                    >/dev/null 2>&1
+                    >/dev/null \
+                    2>&1
                 then
                     MENU_STAGE_DESKTOP=1
                 fi
                 ;;
+
             kde)
                 if arch-chroot \
                     /mnt \
                     systemctl \
                     is-enabled \
                     sddm.service \
-                    >/dev/null 2>&1
+                    >/dev/null \
+                    2>&1
                 then
                     MENU_STAGE_DESKTOP=1
                 fi
                 ;;
+
             xfce)
                 if arch-chroot \
                     /mnt \
                     systemctl \
                     is-enabled \
                     lightdm.service \
-                    >/dev/null 2>&1
+                    >/dev/null \
+                    2>&1
                 then
                     MENU_STAGE_DESKTOP=1
                 fi
                 ;;
         esac
-    else
-        MENU_STAGE_DESKTOP=1
     fi
+
+    #--------------------------------------------------------
+    # Services
+    #--------------------------------------------------------
 
     if arch-chroot \
         /mnt \
         systemctl \
         is-enabled \
         NetworkManager.service \
-        >/dev/null 2>&1
+        >/dev/null \
+        2>&1
     then
         MENU_STAGE_SERVICES=1
     fi
 
+    #--------------------------------------------------------
+    # Bootloader
+    #--------------------------------------------------------
+
     if [[ -f /mnt/boot/grub/grub.cfg ]]
     then
-        MENU_STAGE_BOOTLOADER=1
+        case "$(config_get BOOT_MODE)" in
+            UEFI)
+                if [[ -f /mnt/boot/efi/EFI/ARCHLINUX/grubx64.efi ]]
+                then
+                    MENU_STAGE_BOOTLOADER=1
+                fi
+                ;;
+
+            BIOS)
+                if [[ -d /mnt/boot/grub/i386-pc ]]
+                then
+                    MENU_STAGE_BOOTLOADER=1
+                fi
+                ;;
+        esac
+    fi
+
+    #--------------------------------------------------------
+    # Summary
+    #--------------------------------------------------------
+
+    if (( MENU_STAGE_BOOTLOADER == 1 ))
+    then
+        MENU_STAGE_SUMMARY=1
     fi
 }
 
 #------------------------------------------------------------
-# Draw
+# Draw menu
 #------------------------------------------------------------
 
 menu_main_draw()
@@ -345,7 +613,7 @@ menu_main_draw()
     done
 
     statusbar_draw \
-        "↑↓ Navigate   Enter Select   Esc Exit"
+        "Up/Down Navigate   Enter Select   Esc Exit"
 
     screen_refresh
 }
@@ -387,6 +655,123 @@ menu_main_require_disk()
 
         return 1
     fi
+
+    return 0
+}
+
+#------------------------------------------------------------
+# Check network
+#------------------------------------------------------------
+
+menu_main_require_network()
+{
+    local iface
+    local address
+
+    iface="$(
+        config_get NETWORK_INTERFACE \
+            2>/dev/null \
+            || true
+    )"
+
+    if [[ -z "$iface" ]]
+    then
+        dialog_error \
+            "Configure network first"
+
+        return 1
+    fi
+
+    if [[ ! -e "/sys/class/net/${iface}" ]]
+    then
+        dialog_error \
+            "Configured network interface does not exist: ${iface}"
+
+        return 1
+    fi
+
+    address="$(
+        network_ip \
+            "$iface" \
+            2>/dev/null \
+            || true
+    )"
+
+    if [[ -z "$address" ]]
+    then
+        dialog_error \
+            "Network interface has no IPv4 address: ${iface}"
+
+        return 1
+    fi
+
+    if ! ip \
+        route \
+        get \
+        1.1.1.1 \
+        >/dev/null \
+        2>&1
+    then
+        dialog_error \
+            "Default network route is unavailable"
+
+        return 1
+    fi
+
+    if ! getent \
+        hosts \
+        archlinux.org \
+        >/dev/null \
+        2>&1
+    then
+        dialog_error \
+            "DNS resolution is unavailable"
+
+        return 1
+    fi
+
+    return 0
+}
+
+#------------------------------------------------------------
+# Check mirrors
+#------------------------------------------------------------
+
+menu_main_require_mirrors()
+{
+    local mirrorlist="/etc/pacman.d/mirrorlist"
+
+    menu_main_require_network || \
+        return 1
+
+    if [[ ! -f "$mirrorlist" ]]
+    then
+        dialog_error \
+            "Mirrorlist is missing: ${mirrorlist}"
+
+        return 1
+    fi
+
+    if [[ ! -s "$mirrorlist" ]]
+    then
+        dialog_error \
+            "Mirrorlist is empty: ${mirrorlist}"
+
+        return 1
+    fi
+
+    if ! grep \
+        -Eq \
+        '^[[:space:]]*Server[[:space:]]*=' \
+        "$mirrorlist"
+    then
+        dialog_error \
+            "Mirrorlist contains no active Server entries"
+
+        return 1
+    fi
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -413,6 +798,31 @@ menu_main_require_partition()
 
         return 1
     fi
+
+    if [[ "$(config_get BOOT_MODE)" == "UEFI" ]]
+    then
+        if [[ ! -b "$(config_get EFI_PART)" ]]
+        then
+            dialog_error \
+                "EFI partition does not exist"
+
+            return 1
+        fi
+    fi
+
+    if [[ "$(config_get BOOT_MODE)" == "BIOS" &&
+          "$(config_get PARTITION_TABLE)" == "GPT" ]]
+    then
+        if [[ ! -b "$(config_get BIOS_PART)" ]]
+        then
+            dialog_error \
+                "BIOS boot partition does not exist"
+
+            return 1
+        fi
+    fi
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -421,27 +831,71 @@ menu_main_require_partition()
 
 menu_main_require_filesystem()
 {
+    local root_part
+    local expected
+    local actual
+
     menu_main_require_partition || \
         return 1
 
-    local filesystem
+    root_part="$(
+        config_get ROOT_PART
+    )"
 
-    filesystem="$(
+    expected="$(
+        config_get FILESYSTEM
+    )"
+
+    actual="$(
         blkid \
+            -p \
             -s TYPE \
             -o value \
-            "$(config_get ROOT_PART)" \
+            "$root_part" \
             2>/dev/null \
             || true
     )"
 
-    if [[ -z "$filesystem" ]]
+    if [[ -z "$actual" ]]
     then
         dialog_error \
             "Root filesystem has not been formatted"
 
         return 1
     fi
+
+    if [[ "$actual" != "$expected" ]]
+    then
+        dialog_error \
+            "Wrong root filesystem: expected ${expected}, got ${actual}"
+
+        return 1
+    fi
+
+    if [[ "$(config_get BOOT_MODE)" == "UEFI" ]]
+    then
+        local efi_type
+
+        efi_type="$(
+            blkid \
+                -p \
+                -s TYPE \
+                -o value \
+                "$(config_get EFI_PART)" \
+                2>/dev/null \
+                || true
+        )"
+
+        if [[ "$efi_type" != "vfat" ]]
+        then
+            dialog_error \
+                "EFI partition is not formatted as vfat"
+
+            return 1
+        fi
+    fi
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -460,6 +914,30 @@ menu_main_require_mount()
 
         return 1
     fi
+
+    if [[ "$(config_get CREATE_HOME)" == "1" ]]
+    then
+        if ! mountpoint -q /mnt/home
+        then
+            dialog_error \
+                "Mount the home partition first"
+
+            return 1
+        fi
+    fi
+
+    if [[ "$(config_get BOOT_MODE)" == "UEFI" ]]
+    then
+        if ! mountpoint -q /mnt/boot/efi
+        then
+            dialog_error \
+                "Mount the EFI partition first"
+
+            return 1
+        fi
+    fi
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -479,6 +957,14 @@ menu_main_require_packages()
         return 1
     fi
 
+    if [[ ! -d /mnt/var/lib/pacman/local ]]
+    then
+        dialog_error \
+            "Target package database is missing"
+
+        return 1
+    fi
+
     if [[ ! -f /mnt/etc/fstab ]]
     then
         dialog_error \
@@ -486,6 +972,8 @@ menu_main_require_packages()
 
         return 1
     fi
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -520,6 +1008,8 @@ menu_main_require_locale()
 
         return 1
     fi
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -528,6 +1018,8 @@ menu_main_require_locale()
 
 menu_main_require_users()
 {
+    local user_name
+
     menu_main_require_locale || \
         return 1
 
@@ -539,9 +1031,9 @@ menu_main_require_users()
         return 1
     fi
 
-    local user_name
-
-    user_name="$(config_get USER_NAME)"
+    user_name="$(
+        config_get USER_NAME
+    )"
 
     if [[ -z "$user_name" ]]
     then
@@ -553,15 +1045,27 @@ menu_main_require_users()
 
     if ! arch-chroot \
         /mnt \
-        getent passwd \
+        getent \
+        passwd \
         "$user_name" \
-        >/dev/null 2>&1
+        >/dev/null \
+        2>&1
     then
         dialog_error \
             "Create the user first"
 
         return 1
     fi
+
+    if [[ ! -f /mnt/etc/sudoers.d/10-wheel ]]
+    then
+        dialog_error \
+            "Configure sudo for the user first"
+
+        return 1
+    fi
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -570,12 +1074,16 @@ menu_main_require_users()
 
 menu_main_require_desktop()
 {
+    local desktop
+
     menu_main_require_users || \
         return 1
 
-    local desktop
-
-    desktop="$(config_get DESKTOP)"
+    desktop="$(
+        config_get DESKTOP \
+            2>/dev/null \
+            || true
+    )"
 
     if [[ -z "$desktop" ]]
     then
@@ -584,41 +1092,62 @@ menu_main_require_desktop()
 
     case "$desktop" in
         gnome)
-            arch-chroot \
+            if ! arch-chroot \
                 /mnt \
                 systemctl \
                 is-enabled \
                 gdm.service \
-                >/dev/null 2>&1
+                >/dev/null \
+                2>&1
+            then
+                dialog_error \
+                    "Configure GNOME display manager first"
+
+                return 1
+            fi
             ;;
+
         kde)
-            arch-chroot \
+            if ! arch-chroot \
                 /mnt \
                 systemctl \
                 is-enabled \
                 sddm.service \
-                >/dev/null 2>&1
+                >/dev/null \
+                2>&1
+            then
+                dialog_error \
+                    "Configure KDE display manager first"
+
+                return 1
+            fi
             ;;
+
         xfce)
-            arch-chroot \
+            if ! arch-chroot \
                 /mnt \
                 systemctl \
                 is-enabled \
                 lightdm.service \
-                >/dev/null 2>&1
+                >/dev/null \
+                2>&1
+            then
+                dialog_error \
+                    "Configure Xfce display manager first"
+
+                return 1
+            fi
             ;;
+
         *)
             dialog_error \
                 "Unsupported desktop: ${desktop}"
 
             return 1
             ;;
-    esac || {
-        dialog_error \
-            "Configure desktop first"
+    esac
 
-        return 1
-    }
+    return 0
 }
 
 #------------------------------------------------------------
@@ -635,13 +1164,16 @@ menu_main_require_services()
         systemctl \
         is-enabled \
         NetworkManager.service \
-        >/dev/null 2>&1
+        >/dev/null \
+        2>&1
     then
         dialog_error \
             "Configure system services first"
 
         return 1
     fi
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -650,6 +1182,8 @@ menu_main_require_services()
 
 menu_main_require_bootloader()
 {
+    local boot_mode
+
     menu_main_require_services || \
         return 1
 
@@ -660,6 +1194,49 @@ menu_main_require_bootloader()
 
         return 1
     fi
+
+    if [[ ! -f /mnt/boot/grub/grub.cfg ]]
+    then
+        dialog_error \
+            "GRUB configuration is missing"
+
+        return 1
+    fi
+
+    boot_mode="$(
+        config_get BOOT_MODE
+    )"
+
+    case "$boot_mode" in
+        UEFI)
+            if [[ ! -f /mnt/boot/efi/EFI/ARCHLINUX/grubx64.efi ]]
+            then
+                dialog_error \
+                    "UEFI GRUB binary is missing"
+
+                return 1
+            fi
+            ;;
+
+        BIOS)
+            if [[ ! -d /mnt/boot/grub/i386-pc ]]
+            then
+                dialog_error \
+                    "BIOS GRUB files are missing"
+
+                return 1
+            fi
+            ;;
+
+        *)
+            dialog_error \
+                "Invalid boot mode: ${boot_mode}"
+
+            return 1
+            ;;
+    esac
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -674,54 +1251,74 @@ menu_main_check_action()
         welcome)
             return 0
             ;;
+
         keyboard)
             return 0
             ;;
+
         locale)
             return 0
             ;;
+
         network)
             return 0
             ;;
+
         mirrors)
-            return 0
+            menu_main_require_mirrors
             ;;
+
         disks)
             return 0
             ;;
+
         partition)
             menu_main_require_disk
             ;;
+
         filesystem)
             menu_main_require_partition
             ;;
-        mount)
+
+        mount_system)
             menu_main_require_filesystem
             ;;
+
         packages_install)
+            menu_main_require_mirrors || \
+                return 1
+
             menu_main_require_mount
             ;;
+
         locale_generate)
             menu_main_require_packages
             ;;
+
         users)
             menu_main_require_locale
             ;;
+
         desktop)
             menu_main_require_users
             ;;
+
         services)
             menu_main_require_desktop
             ;;
+
         bootloader)
             menu_main_require_services
             ;;
+
         summary)
             menu_main_require_bootloader
             ;;
+
         exit)
             return 0
             ;;
+
         *)
             dialog_error \
                 "Unknown menu action: ${action}"
@@ -740,36 +1337,54 @@ menu_main_mark_stage()
     local action="$1"
 
     case "$action" in
+        network)
+            MENU_STAGE_NETWORK=1
+            ;;
+
+        mirrors)
+            MENU_STAGE_MIRRORS=1
+            ;;
+
         disks)
             MENU_STAGE_DISK=1
             ;;
+
         partition)
             MENU_STAGE_PARTITION=1
             ;;
+
         filesystem)
             MENU_STAGE_FILESYSTEM=1
             ;;
-        mount)
+
+        mount_system)
             MENU_STAGE_MOUNT=1
             ;;
+
         packages_install)
             MENU_STAGE_PACKAGES=1
             ;;
+
         locale_generate)
             MENU_STAGE_LOCALE=1
             ;;
+
         users)
             MENU_STAGE_USERS=1
             ;;
+
         desktop)
             MENU_STAGE_DESKTOP=1
             ;;
+
         services)
             MENU_STAGE_SERVICES=1
             ;;
+
         bootloader)
             MENU_STAGE_BOOTLOADER=1
             ;;
+
         summary)
             MENU_STAGE_SUMMARY=1
             ;;
@@ -777,7 +1392,7 @@ menu_main_mark_stage()
 }
 
 #------------------------------------------------------------
-# Execute
+# Execute selected action
 #------------------------------------------------------------
 
 menu_main_execute()
@@ -797,7 +1412,8 @@ menu_main_execute()
     fi
 
     if ! declare -F "$action" \
-        >/dev/null 2>&1
+        >/dev/null \
+        2>&1
     then
         dialog_error \
             "Missing action function: ${action}"
@@ -814,25 +1430,29 @@ menu_main_execute()
     fi
 
     menu_main_clear_screen
-
     screen_refresh
 
-    set +e
+    #
+    # Calling the action inside an if statement prevents errexit
+    # from terminating the main menu unexpectedly.
+    #
 
-    "$action"
-
-    result=$?
-
-    set -e
+    if "$action"
+    then
+        result=0
+    else
+        result=$?
+    fi
 
     menu_main_clear_screen
-
     screen_refresh
 
     if (( result == 0 ))
     then
         menu_main_mark_stage \
             "$action"
+
+        menu_main_refresh_state
 
         logger_info \
             "Menu action completed: ${action}"
@@ -845,7 +1465,7 @@ menu_main_execute()
     fi
 
     #
-    # Ошибка action не завершает главное меню.
+    # An action error must not terminate the main menu.
     #
 
     return 0
@@ -858,13 +1478,14 @@ menu_main_execute()
 menu_main_install_all()
 {
     local action
-    local result
 
     for action in \
+        network \
+        mirrors \
         disks \
         partition \
         filesystem \
-        mount \
+        mount_system \
         packages_install \
         locale_generate \
         users \
@@ -877,32 +1498,45 @@ menu_main_install_all()
             "Automatic stage: ${action}"
 
         if ! declare -F "$action" \
-            >/dev/null 2>&1
+            >/dev/null \
+            2>&1
         then
             dialog_error \
+                "Missing installation stage: ${action}"
+
+            logger_error \
                 "Missing installation stage: ${action}"
 
             return 1
         fi
 
-        "$action"
-
-        result=$?
-
-        if (( result != 0 ))
+        if ! menu_main_check_action "$action"
         then
+            logger_error \
+                "Prerequisites failed for: ${action}"
+
+            dialog_error \
+                "Prerequisites failed for: ${action}"
+
+            return 1
+        fi
+
+        if "$action"
+        then
+            menu_main_mark_stage \
+                "$action"
+        else
             logger_error \
                 "Automatic installation stopped at: ${action}"
 
             dialog_error \
                 "Installation stopped at:\n${action}"
 
-            return "$result"
+            return 1
         fi
-
-        menu_main_mark_stage \
-            "$action"
     done
+
+    menu_main_refresh_state
 
     return 0
 }
@@ -915,6 +1549,7 @@ menu_main()
 {
     local event
 
+    MENU_SELECTED=0
     MENU_EXIT_REQUESTED=0
 
     menu_main_refresh_state
@@ -924,6 +1559,7 @@ menu_main()
 
     while (( ! MENU_EXIT_REQUESTED ))
     do
+        menu_main_refresh_state
         menu_main_draw
 
         event="$(
@@ -934,12 +1570,15 @@ menu_main()
             "$EVENT_UP")
                 menu_main_previous
                 ;;
+
             "$EVENT_DOWN")
                 menu_main_next
                 ;;
+
             "$EVENT_SELECT")
                 menu_main_execute
                 ;;
+
             "$EVENT_BACK")
                 MENU_EXIT_REQUESTED=1
                 ;;
@@ -947,493 +1586,6 @@ menu_main()
     done
 
     menu_main_clear_screen
-
-    screen_refresh
-
-    logger_info \
-        "Main menu finished"
-
-    return 0
-}#!/usr/bin/env bash
-#
-#============================================================
-#  Arch Installer
-#------------------------------------------------------------
-#  menu_main.sh
-#
-#  Главное меню установщика.
-#
-#  Ответственность:
-#   • Навигация по разделам installer
-#   • Проверка зависимостей workflow
-#   • Запуск installer-модулей
-#   • Контроль порядка критических стадий
-#   • Обработка ошибок без выхода из меню
-#
-#  Критическая цепочка:
-#
-#   disks
-#     ↓
-#   partition
-#     ↓
-#   filesystem
-#     ↓
-#   mount
-#     ↓
-#   packages
-#     ↓
-#   bootloader
-#
-#============================================================
-
-[[ -n "${MENU_MAIN_SH_LOADED:-}" ]] && return
-
-readonly MENU_MAIN_SH_LOADED=1
-
-#------------------------------------------------------------
-# Menu state
-#------------------------------------------------------------
-
-MENU_SELECTED=0
-MENU_EXIT_REQUESTED=0
-
-#------------------------------------------------------------
-# Menu data
-#------------------------------------------------------------
-
-MENU_ITEMS=(
-    "Welcome"
-    "Keyboard"
-    "Locale"
-    "Locale generation"
-    "Network"
-    "Mirrors"
-    "Disk selection"
-    "Partition disk"
-    "Filesystem"
-    "Mount system"
-    "Install packages"
-    "Bootloader"
-    "Users"
-    "Desktop"
-    "Services"
-    "Summary"
-    "Exit"
-)
-
-MENU_ACTIONS=(
-    "welcome"
-    "keyboard"
-    "locale"
-    "locale_generate"
-    "network"
-    "mirrors"
-    "disks"
-    "partition"
-    "filesystem"
-    "mount"
-    "packages_install"
-    "bootloader"
-    "users"
-    "desktop"
-    "services"
-    "summary"
-    "exit"
-)
-
-#------------------------------------------------------------
-# Colors / status
-#------------------------------------------------------------
-
-menu_main_item_status()
-{
-    local action="$1"
-
-    case "$action" in
-        disks)
-            if config_has_target_disk
-            then
-                printf '[OK]'
-            else
-                printf '[--]'
-            fi
-            ;;
-        partition)
-            if config_has_root
-            then
-                printf '[OK]'
-            else
-                printf '[--]'
-            fi
-            ;;
-        filesystem)
-            if config_has_root &&
-               [[ "$(config_get FILESYSTEM)" == "ext4" ||
-                  "$(config_get FILESYSTEM)" == "btrfs" ||
-                  "$(config_get FILESYSTEM)" == "xfs" ||
-                  "$(config_get FILESYSTEM)" == "f2fs" ]]
-            then
-                printf '[OK]'
-            else
-                printf '[--]'
-            fi
-            ;;
-        mount)
-            if mountpoint -q /mnt
-            then
-                printf '[OK]'
-            else
-                printf '[--]'
-            fi
-            ;;
-        packages_install)
-            if [[ -x /mnt/usr/bin/bash ]]
-            then
-                printf '[OK]'
-            else
-                printf '[--]'
-            fi
-            ;;
-        bootloader)
-            if [[ -f /mnt/etc/fstab &&
-                  -d /mnt/boot/grub ]]
-            then
-                printf '[OK]'
-            else
-                printf '[--]'
-            fi
-            ;;
-        *)
-            printf '   '
-            ;;
-    esac
-}
-
-#------------------------------------------------------------
-# Clear screen
-#------------------------------------------------------------
-
-menu_main_clear_screen()
-{
-    printf '\033[2J'
-    printf '\033[H'
-}
-
-#------------------------------------------------------------
-# Draw menu
-#------------------------------------------------------------
-
-menu_main_draw()
-{
-    local row=3
-    local index
-    local action
-    local status
-
-    menu_main_clear_screen
-
-    titlebar_draw \
-        "${APP_NAME:-Arch Installer}"
-
-    for index in "${!MENU_ITEMS[@]}"
-    do
-        action="${MENU_ACTIONS[index]}"
-
-        status="$(
-            menu_main_item_status \
-                "$action"
-        )"
-
-        cursor_move \
-            "$row" \
-            5
-
-        if [[ "$index" -eq "$MENU_SELECTED" ]]
-        then
-            printf '> %-24s %s' \
-                "${MENU_ITEMS[index]}" \
-                "$status"
-        else
-            printf '  %-24s %s' \
-                "${MENU_ITEMS[index]}" \
-                "$status"
-        fi
-
-        ((row++))
-    done
-
-    statusbar_draw \
-        "↑↓ Navigate   Enter Select   Esc Exit"
-
-    screen_refresh
-}
-
-#------------------------------------------------------------
-# Navigation
-#------------------------------------------------------------
-
-menu_main_next()
-{
-    ((MENU_SELECTED++))
-
-    if (( MENU_SELECTED >= ${#MENU_ITEMS[@]} ))
-    then
-        MENU_SELECTED=0
-    fi
-}
-
-menu_main_previous()
-{
-    ((MENU_SELECTED--))
-
-    if (( MENU_SELECTED < 0 ))
-    then
-        MENU_SELECTED=$(( ${#MENU_ITEMS[@]} - 1 ))
-    fi
-}
-
-#------------------------------------------------------------
-# Critical workflow prerequisites
-#------------------------------------------------------------
-
-menu_main_check_partition()
-{
-    if ! config_has_target_disk
-    then
-        dialog_error \
-            "Select target disk first"
-
-        return 1
-    fi
-
-    return 0
-}
-
-menu_main_check_filesystem()
-{
-    if ! config_has_root
-    then
-        dialog_error \
-            "Create disk partitions first"
-
-        return 1
-    fi
-
-    return 0
-}
-
-menu_main_check_mount()
-{
-    if ! config_has_root
-    then
-        dialog_error \
-            "Create disk partitions first"
-
-        return 1
-    fi
-
-    if [[ "$(config_get BOOT_MODE)" == "UEFI" &&
-          ! config_has_efi ]]
-    then
-        dialog_error \
-            "EFI partition is not configured"
-
-        return 1
-    fi
-
-    local root_type
-
-    root_type="$(
-        blkid \
-            -s TYPE \
-            -o value \
-            "$(config_get ROOT_PART)" \
-            2>/dev/null \
-            || true
-    )"
-
-    if [[ -z "$root_type" ]]
-    then
-        dialog_error \
-            "Root filesystem is not formatted"
-
-        return 1
-    fi
-
-    return 0
-}
-
-menu_main_check_packages()
-{
-    if ! mountpoint -q /mnt
-    then
-        dialog_error \
-            "Mount the target system first"
-
-        return 1
-    fi
-
-    return 0
-}
-
-menu_main_check_bootloader()
-{
-    if [[ ! -x /mnt/usr/bin/bash ]]
-    then
-        dialog_error \
-            "Install the base system first"
-
-        return 1
-    fi
-
-    if [[ ! -f /mnt/etc/fstab ]]
-    then
-        dialog_error \
-            "fstab is missing"
-
-        return 1
-    fi
-
-    return 0
-}
-
-#------------------------------------------------------------
-# Action prerequisites
-#------------------------------------------------------------
-
-menu_main_check_action()
-{
-    local action="$1"
-
-    case "$action" in
-        partition)
-            menu_main_check_partition
-            ;;
-        filesystem)
-            menu_main_check_filesystem
-            ;;
-        mount)
-            menu_main_check_mount
-            ;;
-        packages_install)
-            menu_main_check_packages
-            ;;
-        bootloader)
-            menu_main_check_bootloader
-            ;;
-        *)
-            return 0
-            ;;
-    esac
-}
-
-#------------------------------------------------------------
-# Execute action
-#------------------------------------------------------------
-
-menu_main_execute()
-{
-    local action
-    local result
-
-    action="${MENU_ACTIONS[MENU_SELECTED]}"
-
-    logger_info \
-        "Menu action: ${action}"
-
-    if [[ "$action" == "exit" ]]
-    then
-        MENU_EXIT_REQUESTED=1
-        return 0
-    fi
-
-    if ! declare -F "$action" >/dev/null 2>&1
-    then
-        dialog_error \
-            "Missing installer action: ${action}"
-
-        logger_error \
-            "Missing installer action: ${action}"
-
-        return 0
-    fi
-
-    if ! menu_main_check_action "$action"
-    then
-        return 0
-    fi
-
-    menu_main_clear_screen
-
-    screen_refresh
-
-    "$action"
-
-    result=$?
-
-    menu_main_clear_screen
-
-    screen_refresh
-
-    if (( result != 0 ))
-    then
-        logger_error \
-            "Menu action failed: ${action} exit=${result}"
-
-        dialog_error \
-            "Action failed: ${action}"
-    else
-        logger_info \
-            "Menu action completed: ${action}"
-    fi
-
-    #
-    # КРИТИЧНО:
-    # Ошибка действия НЕ должна означать выход из меню.
-    #
-
-    return 0
-}
-
-#------------------------------------------------------------
-# Main event loop
-#------------------------------------------------------------
-
-menu_main()
-{
-    local event
-
-    MENU_EXIT_REQUESTED=0
-
-    logger_info \
-        "Main menu started"
-
-    while (( ! MENU_EXIT_REQUESTED ))
-    do
-        menu_main_draw
-
-        event="$(
-            event_read
-        )"
-
-        case "$event" in
-            "$EVENT_UP")
-                menu_main_previous
-                ;;
-            "$EVENT_DOWN")
-                menu_main_next
-                ;;
-            "$EVENT_SELECT")
-                menu_main_execute
-                ;;
-            "$EVENT_BACK")
-                MENU_EXIT_REQUESTED=1
-                ;;
-        esac
-    done
-
-    menu_main_clear_screen
-
     screen_refresh
 
     logger_info \

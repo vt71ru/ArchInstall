@@ -10,15 +10,18 @@
 #  Ответственность:
 #   • Инициализация логгера
 #   • Запись сообщений в файл
-#   • Вывод сообщений в stderr
-#   • Уровни DEBUG / INFO / WARN / ERROR
+#   • Вывод WARN / ERROR в stderr
+#   • DEBUG / INFO / WARN / ERROR
 #   • Запись исключений
 #   • Закрытие логгера
 #
 #  Не зависит от других модулей ArchInstaller.
 #============================================================
 
-[[ -n "${LOGGER_SH_LOADED:-}" ]] && return
+if [[ -n "${LOGGER_SH_LOADED:-}" ]]
+then
+    return 0
+fi
 
 readonly LOGGER_SH_LOADED=1
 
@@ -46,33 +49,51 @@ readonly LOGGER_LEVEL_ERROR=3
 
 logger_level_number()
 {
-    case "${1:-INFO}" in
+    case "${1:-INFO}"
+    in
         DEBUG)
-            printf '%s\n' "$LOGGER_LEVEL_DEBUG"
+            printf '%s' \
+                "$LOGGER_LEVEL_DEBUG"
             ;;
+
         INFO)
-            printf '%s\n' "$LOGGER_LEVEL_INFO"
+            printf '%s' \
+                "$LOGGER_LEVEL_INFO"
             ;;
+
         WARN)
-            printf '%s\n' "$LOGGER_LEVEL_WARN"
+            printf '%s' \
+                "$LOGGER_LEVEL_WARN"
             ;;
+
         ERROR)
-            printf '%s\n' "$LOGGER_LEVEL_ERROR"
+            printf '%s' \
+                "$LOGGER_LEVEL_ERROR"
             ;;
+
         *)
-            printf '%s\n' "$LOGGER_LEVEL_INFO"
+            printf '%s' \
+                "$LOGGER_LEVEL_INFO"
             ;;
     esac
 }
+
+#============================================================
+# Timestamp
+#============================================================
 
 logger_timestamp()
 {
     date '+%Y-%m-%d %H:%M:%S'
 }
 
+#============================================================
+# Should log
+#============================================================
+
 logger_should_log()
 {
-    local message_level="$1"
+    local message_level="${1:-INFO}"
     local configured_level
 
     configured_level="$(
@@ -88,10 +109,14 @@ logger_should_log()
     (( message_level >= configured_level ))
 }
 
+#============================================================
+# Write
+#============================================================
+
 logger_write()
 {
     local level="${1:-INFO}"
-    local message="${2:-}"
+    local message="${2-}"
     local timestamp
     local line
 
@@ -101,7 +126,8 @@ logger_write()
 
     line="[${timestamp}] [${level}] ${message}"
 
-    if (( LOGGER_INITIALIZED ))
+    if (( LOGGER_INITIALIZED )) &&
+       [[ -n "${LOGGER_FD:-}" ]]
     then
         printf '%s\n' \
             "$line" \
@@ -112,13 +138,14 @@ logger_write()
             >> "$LOGGER_FILE"
     fi
 
-    if [[ "$level" == "ERROR" ||
-          "$level" == "WARN" ]]
-    then
-        printf '%s\n' \
-            "$line" \
-            >&2
-    fi
+    case "$level"
+    in
+        WARN|ERROR)
+            printf '%s\n' \
+                "$line" \
+                >&2
+            ;;
+    esac
 }
 
 #============================================================
@@ -134,31 +161,41 @@ logger_init()
         return 0
     fi
 
-    if [[ -z "$LOGGER_FILE" ]]
-    then
-        LOGGER_FILE="/tmp/arch-installer.log"
-    fi
+    : "${LOGGER_FILE:=/tmp/arch-installer.log}"
+    : "${LOGGER_LEVEL:=INFO}"
+
+    case "$LOGGER_LEVEL"
+    in
+        DEBUG|INFO|WARN|ERROR)
+            ;;
+        *)
+            LOGGER_LEVEL="INFO"
+            ;;
+    esac
 
     directory="$(
         dirname \
+            -- \
             "$LOGGER_FILE"
     )"
 
     if [[ ! -d "$directory" ]]
     then
-        mkdir -p \
-            "$directory" \
-            || {
-                printf \
-                    'Failed to create logger directory: %s\n' \
-                    "$directory" \
-                    >&2
+        if ! mkdir -p \
+            -- \
+            "$directory"
+        then
+            printf \
+                'Failed to create logger directory: %s\n' \
+                "$directory" \
+                >&2
 
-                return 1
-            }
+            return 1
+        fi
     fi
 
     if ! touch \
+        -- \
         "$LOGGER_FILE"
     then
         printf \
@@ -181,13 +218,16 @@ logger_init()
 
     LOGGER_INITIALIZED=1
 
-    logger_info \
+    logger_write \
+        INFO \
         "Logger initialized"
 
-    logger_info \
+    logger_write \
+        INFO \
         "Log file: ${LOGGER_FILE}"
 
-    logger_info \
+    logger_write \
+        INFO \
         "Log level: ${LOGGER_LEVEL}"
 
     return 0
@@ -199,7 +239,7 @@ logger_init()
 
 logger_debug()
 {
-    local message="${1:-}"
+    local message="${1-}"
 
     if logger_should_log DEBUG
     then
@@ -215,7 +255,7 @@ logger_debug()
 
 logger_info()
 {
-    local message="${1:-}"
+    local message="${1-}"
 
     if logger_should_log INFO
     then
@@ -231,7 +271,7 @@ logger_info()
 
 logger_warn()
 {
-    local message="${1:-}"
+    local message="${1-}"
 
     if logger_should_log WARN
     then
@@ -247,7 +287,7 @@ logger_warn()
 
 logger_error()
 {
-    local message="${1:-}"
+    local message="${1-}"
 
     if logger_should_log ERROR
     then
@@ -263,7 +303,7 @@ logger_error()
 
 logger_exception()
 {
-    local code="${1:-${?}}"
+    local code="${1:-$?}"
     local line="${2:-${LINENO}}"
     local source_file="${3:-${BASH_SOURCE[1]:-unknown}}"
     local function="${4:-${FUNCNAME[1]:-unknown}}"
@@ -290,12 +330,13 @@ logger_close()
         return 0
     fi
 
-    logger_info \
+    logger_write \
+        INFO \
         "Logger shutting down"
 
     if [[ -n "${LOGGER_FD:-}" ]]
     then
-        exec {LOGGER_FD}>&-
+        exec {LOGGER_FD}>&- || true
     fi
 
     LOGGER_FD=""
@@ -303,3 +344,7 @@ logger_close()
 
     return 0
 }
+
+#============================================================
+# End
+#============================================================

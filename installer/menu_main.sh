@@ -1,3 +1,4 @@
+```bash
 #!/usr/bin/env bash
 #
 #============================================================
@@ -9,7 +10,7 @@
 #
 # Ответственность:
 #   • отображение главного меню
-#   • навигация
+#   • навигация через TUI API
 #   • запуск installer controller
 #   • системная информация
 #   • shell
@@ -42,13 +43,29 @@ readonly MENU_MAIN_SH_LOADED=1
 # Paths
 #============================================================
 
-MENU_MAIN_ROOT="${INSTALLER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+MENU_MAIN_ROOT="${INSTALLER_ROOT:-}"
+
+if [[ -z "$MENU_MAIN_ROOT" ]]
+then
+    MENU_MAIN_ROOT="$(
+        cd \
+            "$(dirname "${BASH_SOURCE[0]}")/.." \
+            >/dev/null 2>&1 &&
+        pwd
+    )"
+fi
 
 readonly MENU_MAIN_ROOT
 
 MENU_MAIN_INSTALLER="$MENU_MAIN_ROOT/installer"
 
 readonly MENU_MAIN_INSTALLER
+
+#============================================================
+# State
+#============================================================
+
+MENU_MAIN_INSTALLER_LOADED=0
 
 #============================================================
 # Load installer controller
@@ -58,6 +75,17 @@ menu_main_load_installer()
 {
     local file="$MENU_MAIN_INSTALLER/installer.sh"
 
+    #
+    # Already loaded.
+    #
+    if (( MENU_MAIN_INSTALLER_LOADED ))
+    then
+        return 0
+    fi
+
+    #
+    # Check file.
+    #
     if [[ ! -f "$file" ]]
     then
         logger_error \
@@ -66,6 +94,9 @@ menu_main_load_installer()
         return 1
     fi
 
+    #
+    # Load controller.
+    #
     # shellcheck disable=SC1090
     if ! source "$file"
     then
@@ -74,6 +105,33 @@ menu_main_load_installer()
 
         return 1
     fi
+
+    #
+    # Verify required controller API.
+    #
+    local function
+
+    for function in \
+        installer_run \
+        installer_partition \
+        installer_filesystem \
+        installer_mount \
+        installer_packages \
+        installer_bootloader
+    do
+        if ! declare -F "$function" >/dev/null 2>&1
+        then
+            logger_error \
+                "Main menu: required function is unavailable: $function"
+
+            return 1
+        fi
+    done
+
+    MENU_MAIN_INSTALLER_LOADED=1
+
+    logger_debug \
+        "Main menu: installer controller loaded"
 
     return 0
 }
@@ -84,24 +142,26 @@ menu_main_load_installer()
 
 menu_main_header()
 {
-    tui_clear
+    tui_clear || return 1
 
     titlebar_draw \
-        "Arch Installer"
+        "Arch Installer" || return 1
 
     tui_move \
         3 \
-        5
+        5 || return 1
 
     color_info \
         "Arch Linux Installation System"
 
     tui_move \
         4 \
-        5
+        5 || return 1
 
     tui_print \
         "Select an operation"
+
+    return 0
 }
 
 #============================================================
@@ -110,10 +170,24 @@ menu_main_header()
 
 menu_main_partition()
 {
+    logger_info \
+        "Partition stage selected"
+
     menu_main_load_installer || \
         return 1
 
-    installer_partition
+    if installer_partition
+    then
+        logger_info \
+            "Partition stage completed"
+
+        return 0
+    fi
+
+    logger_warn \
+        "Partition stage cancelled or failed"
+
+    return 1
 }
 
 #============================================================
@@ -122,10 +196,24 @@ menu_main_partition()
 
 menu_main_filesystem()
 {
+    logger_info \
+        "Filesystem stage selected"
+
     menu_main_load_installer || \
         return 1
 
-    installer_filesystem
+    if installer_filesystem
+    then
+        logger_info \
+            "Filesystem stage completed"
+
+        return 0
+    fi
+
+    logger_warn \
+        "Filesystem stage cancelled or failed"
+
+    return 1
 }
 
 #============================================================
@@ -134,10 +222,24 @@ menu_main_filesystem()
 
 menu_main_mount()
 {
+    logger_info \
+        "Mount stage selected"
+
     menu_main_load_installer || \
         return 1
 
-    installer_mount
+    if installer_mount
+    then
+        logger_info \
+            "Mount stage completed"
+
+        return 0
+    fi
+
+    logger_warn \
+        "Mount stage cancelled or failed"
+
+    return 1
 }
 
 #============================================================
@@ -146,10 +248,24 @@ menu_main_mount()
 
 menu_main_packages()
 {
+    logger_info \
+        "Package stage selected"
+
     menu_main_load_installer || \
         return 1
 
-    installer_packages
+    if installer_packages
+    then
+        logger_info \
+            "Package stage completed"
+
+        return 0
+    fi
+
+    logger_warn \
+        "Package stage cancelled or failed"
+
+    return 1
 }
 
 #============================================================
@@ -158,10 +274,24 @@ menu_main_packages()
 
 menu_main_bootloader()
 {
+    logger_info \
+        "Bootloader stage selected"
+
     menu_main_load_installer || \
         return 1
 
-    installer_bootloader
+    if installer_bootloader
+    then
+        logger_info \
+            "Bootloader stage completed"
+
+        return 0
+    fi
+
+    logger_warn \
+        "Bootloader stage cancelled or failed"
+
+    return 1
 }
 
 #============================================================
@@ -176,6 +306,13 @@ menu_main_install()
     menu_main_load_installer || \
         return 1
 
+    #
+    # Reset previous result if installer controller
+    # provides these variables.
+    #
+    INSTALLER_STAGE="${INSTALLER_STAGE:-}"
+    INSTALLER_LAST_RC="${INSTALLER_LAST_RC:-0}"
+
     if installer_run
     then
         logger_info \
@@ -188,10 +325,22 @@ menu_main_install()
         return 0
     fi
 
-    logger_error \
-        "Full installation failed at stage: ${INSTALLER_STAGE:-unknown}"
+    local rc="${INSTALLER_LAST_RC:-1}"
+    local stage="${INSTALLER_STAGE:-unknown}"
 
-    return "${INSTALLER_LAST_RC:-1}"
+    if ! [[ "$rc" =~ ^[0-9]+$ ]]
+    then
+        rc=1
+    fi
+
+    logger_error \
+        "Full installation failed: stage=$stage rc=$rc"
+
+    dialog_warning \
+        "Installation failed" \
+        "Installation failed at stage: $stage"
+
+    return "$rc"
 }
 
 #============================================================
@@ -200,75 +349,124 @@ menu_main_install()
 
 menu_main_system_info()
 {
-    local kernel
-    local arch
-    local memory
-    local cpu
+    local kernel="unknown"
+    local arch="unknown"
+    local memory="unknown"
+    local cpu="unknown"
 
-    kernel="$(uname -r)"
-    arch="$(uname -m)"
+    #
+    # Kernel.
+    #
+    if command -v uname >/dev/null 2>&1
+    then
+        kernel="$(uname -r 2>/dev/null || printf '%s' 'unknown')"
+        arch="$(uname -m 2>/dev/null || printf '%s' 'unknown')"
+    fi
 
-    memory="$(
-        awk '
-            /MemTotal:/ {
-                printf "%.0f MiB", $2 / 1024
-            }
-        ' /proc/meminfo
-    )"
+    #
+    # Memory.
+    #
+    if [[ -r /proc/meminfo ]]
+    then
+        memory="$(
+            awk '
+                /^MemTotal:/ {
+                    printf "%.0f MiB", $2 / 1024
+                    found=1
+                    exit
+                }
+                END {
+                    if (!found)
+                        printf "%s", "unknown"
+                }
+            ' /proc/meminfo
+        )"
+    fi
 
-    cpu="$(
-        awk -F: '
-            /model name/ {
-                print $2
-                exit
-            }
-        ' /proc/cpuinfo |
-        sed 's/^ *//'
-    )"
+    #
+    # CPU.
+    #
+    if [[ -r /proc/cpuinfo ]]
+    then
+        cpu="$(
+            awk -F: '
+                /^model name[[:space:]]*:/ {
+                    value=$2
+                    sub(/^[[:space:]]+/, "", value)
+                    print value
+                    found=1
+                    exit
+                }
+            ' /proc/cpuinfo
+        )"
 
-    tui_clear
+        if [[ -z "$cpu" ]]
+        then
+            cpu="$(
+                awk -F: '
+                    /^Hardware[[:space:]]*:/ {
+                        value=$2
+                        sub(/^[[:space:]]+/, "", value)
+                        print value
+                        found=1
+                        exit
+                    }
+                ' /proc/cpuinfo
+            )"
+        fi
+    fi
+
+    if [[ -z "$cpu" ]]
+    then
+        cpu="unknown"
+    fi
+
+    logger_debug \
+        "System information requested"
+
+    tui_clear || return 1
 
     draw_panel \
         "System Information" \
         4 \
         5 \
         12 \
-        "$((TUI_COLS - 10))"
+        "$((TUI_COLS - 10))" || return 1
 
     tui_move \
         6 \
-        8
+        8 || return 1
 
     tui_print \
         "Kernel:  $kernel"
 
     tui_move \
         7 \
-        8
+        8 || return 1
 
     tui_print \
         "Arch:    $arch"
 
     tui_move \
         8 \
-        8
+        8 || return 1
 
     tui_print \
         "Memory:  $memory"
 
     tui_move \
         9 \
-        8
+        8 || return 1
 
     tui_print \
         "CPU:     $cpu"
 
     tui_move \
         14 \
-        8
+        8 || return 1
 
     tui_print \
-        "Enter = Back"
+        "Enter / Esc = Back"
 
     while true
     do
@@ -289,20 +487,69 @@ menu_main_system_info()
 
 menu_main_shell()
 {
-    tui_restore
+    logger_info \
+        "Opening interactive shell"
+
+    #
+    # Leave TUI before starting an interactive shell.
+    #
+    if (( TUI_INITIALIZED ))
+    then
+        tui_restore || \
+            return 1
+    fi
 
     printf '\n'
-    printf 'Arch Installer shell\n'
-    printf 'Type "exit" to return to the installer.\n\n'
+    printf '%s\n' \
+        '============================================================'
+    printf '%s\n' \
+        ' Arch Installer shell'
+    printf '%s\n' \
+        '============================================================'
+    printf '%s\n\n' \
+        'Type "exit" to return to the installer.'
 
-    /bin/bash
+    #
+    # Explicitly use /bin/bash.
+    #
+    if ! /bin/bash
+    then
+        local rc="$?"
 
-    printf '\nReturning to Arch Installer...\n'
+        printf '\n'
+        printf 'Shell exited with status %s.\n' "$rc"
+
+        logger_warn \
+            "Interactive shell exited with rc=$rc"
+
+        printf 'Press Enter to return to the installer...'
+        read -r || true
+
+        tui_start || \
+            return 1
+
+        return "$rc"
+    fi
+
+    printf '\n'
+    printf '%s\n' \
+        'Returning to Arch Installer...'
+
+    logger_info \
+        "Interactive shell closed"
 
     sleep 1
 
-    tui_start || \
+    #
+    # Reinitialize and reactivate TUI.
+    #
+    if ! tui_start
+    then
+        logger_error \
+            "Failed to restart TUI after shell"
+
         return 1
+    fi
 
     return 0
 }
@@ -317,12 +564,31 @@ menu_main_exit()
         "Exit Arch Installer?"
     then
         logger_info \
-            "User selected exit"
+            "User confirmed exit"
 
         return 0
     fi
 
+    logger_debug \
+        "User cancelled exit"
+
     return 1
+}
+
+#============================================================
+# Operation error dialog
+#============================================================
+
+menu_main_operation_failed()
+{
+    local title="${1:-Operation}"
+    local message="${2:-Operation was cancelled or failed.}"
+
+    dialog_warning \
+        "$title" \
+        "$message" || true
+
+    return 0
 }
 
 #============================================================
@@ -332,6 +598,7 @@ menu_main_exit()
 menu_main()
 {
     local selected=0
+    local item_count
     local i
 
     local items=(
@@ -346,33 +613,101 @@ menu_main()
         "Exit"
     )
 
+    item_count="${#items[@]}"
+
+    if (( item_count == 0 ))
+    then
+        logger_error \
+            "Main menu: menu contains no items"
+
+        return 1
+    fi
+
+    #
+    # Validate TUI state.
+    #
+    if (( ! TUI_INITIALIZED ))
+    then
+        logger_error \
+            "Main menu: TUI is not initialized"
+
+        return 1
+    fi
+
+    if (( ! TUI_ACTIVE ))
+    then
+        logger_error \
+            "Main menu: TUI is not active"
+
+        return 1
+    fi
+
     logger_info \
         "Main menu started"
 
     while true
     do
-        menu_main_header
-
+        #
         #----------------------------------------------------
-        # Menu box
+        # Draw header.
         #----------------------------------------------------
+        #
+        menu_main_header || \
+            return 1
 
+        #
+        #----------------------------------------------------
+        # Calculate menu height.
+        #----------------------------------------------------
+        #
+        local box_height=$((item_count + 4))
+
+        if (( box_height > TUI_ROWS - 3 ))
+        then
+            box_height=$((TUI_ROWS - 3))
+        fi
+
+        if (( box_height < 4 ))
+        then
+            logger_error \
+                "Main menu: terminal is too small"
+
+            return 1
+        fi
+
+        #
+        #----------------------------------------------------
+        # Draw menu box.
+        #----------------------------------------------------
+        #
         draw_box \
             6 \
             5 \
             "$((TUI_COLS - 10))" \
-            "$(( ${#items[@]} + 4 ))" || \
+            "$box_height" || \
             return 1
 
+        #
         #----------------------------------------------------
-        # Menu entries
+        # Draw menu entries.
         #----------------------------------------------------
-
+        #
         for i in "${!items[@]}"
         do
+            local row=$((8 + i))
+
+            #
+            # Do not draw outside the menu area.
+            #
+            if (( row >= TUI_ROWS - 1 ))
+            then
+                break
+            fi
+
             tui_move \
-                "$((8 + i))" \
-                8
+                "$row" \
+                8 || \
+                return 1
 
             if (( i == selected ))
             then
@@ -384,17 +719,20 @@ menu_main()
             fi
         done
 
+        #
         #----------------------------------------------------
-        # Status bar
+        # Status bar.
         #----------------------------------------------------
-
+        #
         statusbar_draw \
-            '↑↓ Navigate   Home/End   Enter Select   Esc Exit'
+            '↑↓ Navigate   Home/End   Enter Select   Esc Exit' || \
+            return 1
 
+        #
         #----------------------------------------------------
-        # Read event
+        # Read keyboard event.
         #----------------------------------------------------
-
+        #
         event_read
 
         case "$TUI_EVENT"
@@ -404,12 +742,12 @@ menu_main()
                 then
                     selected=$((selected - 1))
                 else
-                    selected=$((${#items[@]} - 1))
+                    selected=$((item_count - 1))
                 fi
                 ;;
 
             "$EVENT_DOWN")
-                if (( selected < ${#items[@]} - 1 ))
+                if (( selected < item_count - 1 ))
                 then
                     selected=$((selected + 1))
                 else
@@ -422,78 +760,124 @@ menu_main()
                 ;;
 
             "$EVENT_END")
-                selected=$((${#items[@]} - 1))
+                selected=$((item_count - 1))
                 ;;
 
             "$EVENT_SELECT")
                 case "$selected"
                 in
+                    #------------------------------------------------
+                    # Full installation
+                    #------------------------------------------------
                     0)
                         if ! menu_main_install
                         then
-                            dialog_warning \
-                                "Installation" \
-                                "Installation was cancelled or failed."
+                            #
+                            # menu_main_install() already displays
+                            # a detailed error dialog.
+                            #
+                            logger_warn \
+                                "Full installation returned failure"
                         fi
                         ;;
 
+                    #------------------------------------------------
+                    # Partition
+                    #------------------------------------------------
                     1)
                         if ! menu_main_partition
                         then
-                            dialog_warning \
+                            menu_main_operation_failed \
                                 "Partition" \
                                 "Partitioning was cancelled or failed."
                         fi
                         ;;
 
+                    #------------------------------------------------
+                    # Filesystem
+                    #------------------------------------------------
                     2)
                         if ! menu_main_filesystem
                         then
-                            dialog_warning \
+                            menu_main_operation_failed \
                                 "Filesystem" \
                                 "Filesystem stage was cancelled or failed."
                         fi
                         ;;
 
+                    #------------------------------------------------
+                    # Mount
+                    #------------------------------------------------
                     3)
                         if ! menu_main_mount
                         then
-                            dialog_warning \
+                            menu_main_operation_failed \
                                 "Mount" \
                                 "Mount stage was cancelled or failed."
                         fi
                         ;;
 
+                    #------------------------------------------------
+                    # Packages
+                    #------------------------------------------------
                     4)
                         if ! menu_main_packages
                         then
-                            dialog_warning \
+                            menu_main_operation_failed \
                                 "Packages" \
                                 "Package installation was cancelled or failed."
                         fi
                         ;;
 
+                    #------------------------------------------------
+                    # Bootloader
+                    #------------------------------------------------
                     5)
                         if ! menu_main_bootloader
                         then
-                            dialog_warning \
+                            menu_main_operation_failed \
                                 "Bootloader" \
                                 "Bootloader installation was cancelled or failed."
                         fi
                         ;;
 
+                    #------------------------------------------------
+                    # System information
+                    #------------------------------------------------
                     6)
-                        menu_main_system_info
+                        if ! menu_main_system_info
+                        then
+                            logger_warn \
+                                "System information dialog failed"
+                        fi
                         ;;
 
+                    #------------------------------------------------
+                    # Shell
+                    #------------------------------------------------
                     7)
                         if ! menu_main_shell
                         then
                             dialog_error \
-                                "Failed to return to TUI"
+                                "Failed to return to TUI" || true
+
+                            #
+                            # If TUI cannot be restored there is no
+                            # safe way to continue drawing the menu.
+                            #
+                            if (( ! TUI_ACTIVE ))
+                            then
+                                logger_error \
+                                    "TUI is inactive after shell"
+
+                                return 1
+                            fi
                         fi
                         ;;
 
+                    #------------------------------------------------
+                    # Exit
+                    #------------------------------------------------
                     8)
                         if menu_main_exit
                         then
@@ -515,6 +899,24 @@ menu_main()
                     return 0
                 fi
                 ;;
+
+            "$EVENT_F1"|"$EVENT_HELP")
+                dialog_info \
+                    "Help" \
+                    "Use Up/Down to navigate, Enter to select, Esc to exit." \
+                    || true
+                ;;
+
+            *)
+                #
+                # Ignore unsupported keys.
+                #
+                ;;
         esac
     done
 }
+
+#============================================================
+# End
+#============================================================
+```

@@ -14,15 +14,26 @@
 #   • Сохранение LOCALES и LOCALE
 #
 #  Генерация локалей выполняется locale_generate.sh.
+#
+#  Зависит от:
+#   • config.sh
+#   • dialog.sh
+#   • screen.sh
+#   • cursor.sh
+#   • draw.sh
+#   • events.sh
 #============================================================
 
-[[ -n "${LOCALE_SH_LOADED:-}" ]] && return
+if [[ -n "${LOCALE_SH_LOADED:-}" ]]
+then
+    return 0
+fi
 
 readonly LOCALE_SH_LOADED=1
 
-#------------------------------------------------------------
+#============================================================
 # State
-#------------------------------------------------------------
+#============================================================
 
 declare -ga LOCALE_LIST=()
 declare -gA LOCALE_ENABLED=()
@@ -33,15 +44,16 @@ LOCALE_DEFAULT_SELECTED=""
 
 readonly LOCALE_VISIBLE=12
 
-#------------------------------------------------------------
+#============================================================
 # Load locales
-#------------------------------------------------------------
+#============================================================
 
 locale_load()
 {
     local file="/etc/locale.gen"
     local line
     local locale
+    local locale_name
 
     LOCALE_LIST=()
     LOCALE_ENABLED=()
@@ -54,32 +66,71 @@ locale_load()
         return 1
     fi
 
-    while IFS= read -r line
+    while IFS= read -r line || [[ -n "$line" ]]
     do
+        # Remove leading whitespace.
         line="${line#"${line%%[![:space:]]*}"}"
 
         [[ -z "$line" ]] && \
             continue
 
+        # locale.gen contains both:
+        #
+        #   en_US.UTF-8 UTF-8
+        #
+        # and commented entries:
+        #
+        #   #en_US.UTF-8 UTF-8
+        #
+        # Both are intentionally loaded because the installer
+        # can enable selected locales later.
         if [[ "$line" == \#* ]]
         then
             line="${line#\#}"
+
             line="${line#"${line%%[![:space:]]*}"}"
         fi
 
-        if [[ "$line" =~ ^([A-Za-z_]+\.UTF-8)[[:space:]]+UTF-8([[:space:]]*)$ ]]
+        # Take first whitespace-separated field.
+        locale_name="${line%%[[:space:]]*}"
+
+        [[ -z "$locale_name" ]] && \
+            continue
+
+        # Remove anything after first field if there is no space.
+        locale_name="${locale_name//[[:space:]]/}"
+
+        # We only offer UTF-8 locales.
+        #
+        # Supports examples such as:
+        #   en_US.UTF-8
+        #   de_DE.UTF-8
+        #   sr_RS@latin.UTF-8
+        #
+        if [[ "$locale_name" != *.UTF-8 ]]
         then
-            locale="${BASH_REMATCH[1]}"
-
-            if [[ -z "${LOCALE_ENABLED[$locale]+x}" ]]
-            then
-                LOCALE_LIST+=(
-                    "$locale"
-                )
-
-                LOCALE_ENABLED["$locale"]=0
-            fi
+            continue
         fi
+
+        # Make sure the line actually declares UTF-8.
+        if [[ ! "$line" =~ [[:space:]]+UTF-8([[:space:]]*)$ ]]
+        then
+            continue
+        fi
+
+        locale="$locale_name"
+
+        if [[ -v "LOCALE_ENABLED[$locale]" ]]
+        then
+            continue
+        fi
+
+        LOCALE_LIST+=(
+            "$locale"
+        )
+
+        LOCALE_ENABLED["$locale"]=0
+
     done < "$file"
 
     if (( ${#LOCALE_LIST[@]} == 0 ))
@@ -96,11 +147,13 @@ locale_load()
 
     logger_info \
         "Locales loaded: ${#LOCALE_LIST[@]}"
+
+    return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Restore saved selection
-#------------------------------------------------------------
+#============================================================
 
 locale_restore_config()
 {
@@ -110,11 +163,13 @@ locale_restore_config()
     local index
 
     configured="$(
-        config_get LOCALES \
+        config_get \
+            LOCALES \
             2>/dev/null \
             || true
     )"
 
+    # LOCALES is stored as a space-separated list.
     for locale in $configured
     do
         if [[ -v "LOCALE_ENABLED[$locale]" ]]
@@ -124,7 +179,8 @@ locale_restore_config()
     done
 
     default_locale="$(
-        config_get LOCALE \
+        config_get \
+            LOCALE \
             2>/dev/null \
             || true
     )"
@@ -142,19 +198,41 @@ locale_restore_config()
             fi
         done
     fi
+
+    # Keep selection inside the visible window.
+    if (( LOCALE_SELECTED >= LOCALE_OFFSET + LOCALE_VISIBLE ))
+    then
+        LOCALE_OFFSET=$(
+            (( LOCALE_SELECTED - LOCALE_VISIBLE + 1 ))
+        )
+    fi
+
+    if (( LOCALE_OFFSET < 0 ))
+    then
+        LOCALE_OFFSET=0
+    fi
+
+    return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Navigation
-#------------------------------------------------------------
+#============================================================
 
 locale_previous()
 {
+    local count="${#LOCALE_LIST[@]}"
+
+    if (( count == 0 ))
+    then
+        return 1
+    fi
+
     if (( LOCALE_SELECTED > 0 ))
     then
-        ((LOCALE_SELECTED -= 1))
+        LOCALE_SELECTED=$((LOCALE_SELECTED - 1))
     else
-        LOCALE_SELECTED=$(( ${#LOCALE_LIST[@]} - 1 ))
+        LOCALE_SELECTED=$((count - 1))
     fi
 
     if (( LOCALE_SELECTED < LOCALE_OFFSET ))
@@ -162,44 +240,60 @@ locale_previous()
         LOCALE_OFFSET="$LOCALE_SELECTED"
     fi
 
-    if (( LOCALE_SELECTED == ${#LOCALE_LIST[@]} - 1 ))
+    if (( LOCALE_SELECTED == count - 1 ))
     then
-        LOCALE_OFFSET=$(( ${#LOCALE_LIST[@]} - LOCALE_VISIBLE ))
+        LOCALE_OFFSET=$((count - LOCALE_VISIBLE))
 
         if (( LOCALE_OFFSET < 0 ))
         then
             LOCALE_OFFSET=0
         fi
     fi
+
+    return 0
 }
 
 locale_next()
 {
-    if (( LOCALE_SELECTED < ${#LOCALE_LIST[@]} - 1 ))
+    local count="${#LOCALE_LIST[@]}"
+
+    if (( count == 0 ))
     then
-        ((LOCALE_SELECTED += 1))
+        return 1
+    fi
+
+    if (( LOCALE_SELECTED < count - 1 ))
+    then
+        LOCALE_SELECTED=$((LOCALE_SELECTED + 1))
     else
         LOCALE_SELECTED=0
     fi
 
     if (( LOCALE_SELECTED >= LOCALE_OFFSET + LOCALE_VISIBLE ))
     then
-        LOCALE_OFFSET=$(( LOCALE_SELECTED - LOCALE_VISIBLE + 1 ))
+        LOCALE_OFFSET=$((LOCALE_SELECTED - LOCALE_VISIBLE + 1))
     fi
 
     if (( LOCALE_SELECTED == 0 ))
     then
         LOCALE_OFFSET=0
     fi
+
+    return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Toggle
-#------------------------------------------------------------
+#============================================================
 
 locale_toggle()
 {
     local locale
+
+    if (( ${#LOCALE_LIST[@]} == 0 ))
+    then
+        return 1
+    fi
 
     locale="${LOCALE_LIST[LOCALE_SELECTED]}"
 
@@ -212,11 +306,13 @@ locale_toggle()
 
     logger_debug \
         "Locale ${locale}: ${LOCALE_ENABLED[$locale]}"
+
+    return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Draw
-#------------------------------------------------------------
+#============================================================
 
 locale_draw()
 {
@@ -238,12 +334,14 @@ locale_draw()
         18 \
         65
 
-    end=$(( LOCALE_OFFSET + LOCALE_VISIBLE ))
+    end=$((LOCALE_OFFSET + LOCALE_VISIBLE))
 
     for (( index=LOCALE_OFFSET; index<end; index++ ))
     do
-        (( index >= ${#LOCALE_LIST[@]} )) && \
+        if (( index >= ${#LOCALE_LIST[@]} ))
+        then
             break
+        fi
 
         locale="${LOCALE_LIST[index]}"
 
@@ -271,7 +369,7 @@ locale_draw()
                 "$locale"
         fi
 
-        ((row += 1))
+        row=$((row + 1))
     done
 
     cursor_move \
@@ -287,11 +385,13 @@ locale_draw()
         "↑↓ Move  Space Toggle  Enter Continue  Esc Back"
 
     screen_refresh
+
+    return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Selected locales
-#------------------------------------------------------------
+#============================================================
 
 locale_get_selected()
 {
@@ -301,16 +401,17 @@ locale_get_selected()
     do
         if [[ "${LOCALE_ENABLED[$locale]:-0}" == "1" ]]
         then
-            printf \
-                '%s\n' \
+            printf '%s\n' \
                 "$locale"
         fi
     done
+
+    return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Default locale selector
-#------------------------------------------------------------
+#============================================================
 
 locale_select_default()
 {
@@ -318,7 +419,7 @@ locale_select_default()
     local locale
     local selected=0
     local offset=0
-    local visible=12
+    local visible="$LOCALE_VISIBLE"
     local row
     local index
     local end
@@ -336,6 +437,9 @@ locale_select_default()
 
     if (( ${#locales[@]} == 0 ))
     then
+        dialog_error \
+            "No locales selected"
+
         return 1
     fi
 
@@ -366,12 +470,14 @@ locale_select_default()
             65
 
         row=5
-        end=$(( offset + visible ))
+        end=$((offset + visible))
 
         for (( index=offset; index<end; index++ ))
         do
-            (( index >= ${#locales[@]} )) && \
+            if (( index >= ${#locales[@]} ))
+            then
                 break
+            fi
 
             cursor_move \
                 "$row" \
@@ -388,7 +494,7 @@ locale_select_default()
                     "${locales[index]}"
             fi
 
-            ((row += 1))
+            row=$((row + 1))
         done
 
         statusbar_draw \
@@ -400,11 +506,12 @@ locale_select_default()
             event_read
         )"
 
-        case "$event" in
+        case "$event"
+        in
             "$EVENT_UP")
                 if (( selected > 0 ))
                 then
-                    ((selected -= 1))
+                    selected=$((selected - 1))
                 else
                     selected=$(( ${#locales[@]} - 1 ))
                 fi
@@ -424,17 +531,18 @@ locale_select_default()
                     fi
                 fi
                 ;;
+
             "$EVENT_DOWN")
                 if (( selected < ${#locales[@]} - 1 ))
                 then
-                    ((selected += 1))
+                    selected=$((selected + 1))
                 else
                     selected=0
                 fi
 
                 if (( selected >= offset + visible ))
                 then
-                    offset=$(( selected - visible + 1 ))
+                    offset=$((selected - visible + 1))
                 fi
 
                 if (( selected == 0 ))
@@ -442,10 +550,13 @@ locale_select_default()
                     offset=0
                 fi
                 ;;
+
             "$EVENT_SELECT")
                 LOCALE_DEFAULT_SELECTED="${locales[selected]}"
+
                 return 0
                 ;;
+
             "$EVENT_BACK")
                 return 1
                 ;;
@@ -453,9 +564,9 @@ locale_select_default()
     done
 }
 
-#------------------------------------------------------------
+#============================================================
 # Apply
-#------------------------------------------------------------
+#============================================================
 
 locale_apply()
 {
@@ -482,7 +593,7 @@ locale_apply()
     locale_list="${selected[*]}"
 
     #
-    # LANG must always be one of the enabled locales.
+    # LANG must always be one of the selected locales.
     #
 
     if (( count == 1 ))
@@ -490,10 +601,11 @@ locale_apply()
         default_locale="${selected[0]}"
     else
         LOCALE_DEFAULT_SELECTED="$(
-            config_get LOCALE \
+            config_get \
+                LOCALE \
                 2>/dev/null \
                 || true
-        )
+        )"
 
         locale_select_default || \
             return 1
@@ -522,13 +634,29 @@ locale_apply()
 
     config_set \
         LOCALES \
-        "$locale_list"
+        "$locale_list" || {
+        logger_error \
+            "Failed to store LOCALES"
+
+        return 1
+    }
 
     config_set \
         LOCALE \
-        "$default_locale"
+        "$default_locale" || {
+        logger_error \
+            "Failed to store LOCALE"
 
-    config_save
+        return 1
+    }
+
+    if ! config_save
+    then
+        dialog_error \
+            "Failed to save locale configuration"
+
+        return 1
+    fi
 
     logger_info \
         "Locales selected: ${locale_list}"
@@ -543,9 +671,9 @@ locale_apply()
     return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Main
-#------------------------------------------------------------
+#============================================================
 
 locale()
 {
@@ -567,20 +695,25 @@ locale()
             event_read
         )"
 
-        case "$event" in
+        case "$event"
+        in
             "$EVENT_UP")
                 locale_previous
                 ;;
+
             "$EVENT_DOWN")
                 locale_next
                 ;;
+
             "$EVENT_SPACE")
                 locale_toggle
                 ;;
+
             "$EVENT_SELECT")
                 locale_apply || \
                     continue
                 ;;
+
             "$EVENT_BACK")
                 break
                 ;;
@@ -589,4 +722,10 @@ locale()
 
     logger_info \
         "Locale configuration finished"
+
+    return 0
 }
+
+#============================================================
+# End
+#============================================================

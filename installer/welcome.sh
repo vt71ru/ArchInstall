@@ -1,3 +1,4 @@
+```bash
 #!/usr/bin/env bash
 #
 #============================================================
@@ -5,148 +6,103 @@
 #------------------------------------------------------------
 #  welcome.sh
 #
-#  Приветственный экран
+#  Стартовый экран установщика.
 #
-#  Обязанности:
-#   • Информация об установщике
-#   • Проверка готовности
-#   • Начало процесса установки
+#  Ответственность:
+#   • Приветствие пользователя
+#   • Отображение версии
+#   • Краткая информация
 #
-#  Не содержит логику установки Arch.
+#  Не содержит:
+#   • Логику установки
+#   • Работу с дисками
+#   • Настройку системы
 #============================================================
 
-
-[[ -n "${WELCOME_SH_LOADED:-}" ]] && return
+if [[ -n "${WELCOME_SH_LOADED:-}" ]]
+then
+    return 0
+fi
 
 readonly WELCOME_SH_LOADED=1
 
+#============================================================
+# Main
+#============================================================
 
-#------------------------------------------------------------
-# Welcome screen
-#------------------------------------------------------------
-
-welcome_draw()
+welcome()
 {
+    logger_info \
+        "Welcome screen started"
+
     tui_clear
 
-
     titlebar_draw \
-        "${APP_NAME}"
+        "Arch Installer ${APP_VERSION}"
 
-
-    draw_panel \
-        "Welcome" \
-        3 \
+    draw_box \
+        4 \
         5 \
-        12 \
-        75
+        "$(( TUI_COLS - 10 ))" \
+        12
 
-
-    draw_text \
-        5 \
-        8 \
-        "Arch Installer"
-
-
-    draw_text \
+    tui_move \
         7 \
-        8 \
-        "Version: ${APP_VERSION}"
+        8
 
+    color_title \
+        "Welcome to Arch Installer"
 
-    draw_text \
+    tui_move \
         9 \
-        8 \
-        "A text based Arch Linux installer"
+        8
 
+    printf '%s' \
+        "Interactive Arch Linux installation tool."
+
+    tui_move \
+        11 \
+        8
+
+    printf '%s' \
+        "Use ↑ ↓ to navigate, Enter to select, Esc to go back."
+
+    tui_move \
+        13 \
+        8
+
+    printf '%s' \
+        "Version: %s" \
+        "$APP_VERSION"
 
     statusbar_draw \
         "Enter Continue   Esc Back"
 
-
-    screen_refresh
-}
-
-
-#------------------------------------------------------------
-# Environment information
-#------------------------------------------------------------
-
-welcome_check()
-{
-    logger_info "Running welcome checks"
-
-
-    if ! command_exists pacman; then
-
-        dialog_error \
-            "pacman was not found"
-
-        return 1
-
-    fi
-
-
-    if [[ ! -f /etc/arch-release ]]; then
-
-        dialog_error \
-            "Not running on Arch Linux environment"
-
-        return 1
-
-    fi
-
-
-    return 0
-}
-
-
-#------------------------------------------------------------
-# Main
-#------------------------------------------------------------
-
-welcome()
-{
-    logger_info "Welcome screen"
-
-
-    welcome_draw
-
-
-    local event
-
+    tui_flush
 
     while true
     do
-
-        event="$(event_read)"
-
-
-        case "$event" in
-
-
+        case "$(
+            event_read
+        )"
+        in
             "$EVENT_SELECT")
+                logger_info \
+                    "Welcome screen completed"
 
-                if welcome_check; then
-
-                    dialog_message \
-                        "Ready" \
-                        "Environment check passed"
-
-                fi
-
-                break
-
+                return 0
                 ;;
-
 
             "$EVENT_BACK")
+                logger_info \
+                    "Welcome screen cancelled"
 
-                break
-
+                return 1
                 ;;
-
         esac
-
     done
 }
+
+#============================================================
+# End
+#============================================================

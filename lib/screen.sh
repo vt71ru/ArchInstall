@@ -1,3 +1,4 @@
+```bash
 #!/usr/bin/env bash
 #
 #============================================================
@@ -5,42 +6,103 @@
 #------------------------------------------------------------
 #  screen.sh
 #
-#  Управление рабочей областью терминала.
+#  Управление экраном TUI.
 #
 #  Ответственность:
-#   • Определение размеров терминала
-#   • Проверка минимального размера
+#   • Получение размеров терминала
+#   • Подготовка экрана
 #   • Очистка экрана
-#   • Подготовка области вывода
-#   • Обновление размеров при resize
-#   • Безопасное позиционирование
+#   • Очистка области
+#   • Обновление кадра
+#   • Проверка размеров
 #
 #  Не содержит:
-#   • Логику меню
+#   • stty
 #   • Обработку клавиш
-#   • Управление terminal raw mode
-#   • Отрисовку widgets
+#   • Логику меню
+#   • Installer logic
+#
+#  Зависит от:
+#   • terminal.sh
+#   • cursor.sh
+#   • tui.sh
 #============================================================
 
-[[ -n "${SCREEN_SH_LOADED:-}" ]] && return
+if [[ -n "${SCREEN_SH_LOADED:-}" ]]
+then
+    return 0
+fi
 
 readonly SCREEN_SH_LOADED=1
 
-#------------------------------------------------------------
+#============================================================
 # State
-#------------------------------------------------------------
+#============================================================
 
-SCREEN_ROWS=24
-SCREEN_COLS=80
+SCREEN_INITIALIZED=0
+
+SCREEN_ROWS=0
+SCREEN_COLS=0
 
 SCREEN_MIN_ROWS=20
 SCREEN_MIN_COLS=70
 
-SCREEN_INITIALIZED=0
+SCREEN_DIRTY=1
 
-#------------------------------------------------------------
-# Update size
-#------------------------------------------------------------
+#============================================================
+# Initialization
+#============================================================
+
+screen_init()
+{
+    if (( SCREEN_INITIALIZED ))
+    then
+        screen_update_size
+
+        return 0
+    fi
+
+    if ! declare -F terminal_rows >/dev/null 2>&1
+    then
+        logger_error \
+            "terminal_rows() is not available"
+
+        return 1
+    fi
+
+    if ! declare -F terminal_cols >/dev/null 2>&1
+    then
+        logger_error \
+            "terminal_cols() is not available"
+
+        return 1
+    fi
+
+    if ! declare -F cursor_move >/dev/null 2>&1
+    then
+        logger_error \
+            "cursor_move() is not available"
+
+        return 1
+    fi
+
+    if ! screen_update_size
+    then
+        return 1
+    fi
+
+    SCREEN_INITIALIZED=1
+    SCREEN_DIRTY=1
+
+    logger_debug \
+        "Screen initialized: ${SCREEN_COLS}x${SCREEN_ROWS}"
+
+    return 0
+}
+
+#============================================================
+# Update terminal size
+#============================================================
 
 screen_update_size()
 {
@@ -48,33 +110,15 @@ screen_update_size()
     local cols
 
     rows="$(
-        tput lines 2>/dev/null \
-            || printf '0'
+        terminal_rows
     )"
 
     cols="$(
-        tput cols 2>/dev/null \
-            || printf '0'
+        terminal_cols
     )"
 
-    if ! [[ "$rows" =~ ^[0-9]+$ ]]
-    then
-        logger_error \
-            "Invalid terminal row count: ${rows}"
-
-        return 1
-    fi
-
-    if ! [[ "$cols" =~ ^[0-9]+$ ]]
-    then
-        logger_error \
-            "Invalid terminal column count: ${cols}"
-
-        return 1
-    fi
-
-    if (( rows < 1 ||
-          cols < 1 ))
+    if [[ ! "$rows" =~ ^[0-9]+$ ||
+          ! "$cols" =~ ^[0-9]+$ ]]
     then
         logger_error \
             "Invalid terminal dimensions: ${cols}x${rows}"
@@ -82,88 +126,94 @@ screen_update_size()
         return 1
     fi
 
+    if (( rows <= 0 || cols <= 0 ))
+    then
+        logger_error \
+            "Terminal dimensions are zero: ${cols}x${rows}"
+
+        return 1
+    fi
+
     SCREEN_ROWS="$rows"
     SCREEN_COLS="$cols"
 
-    logger_debug \
-        "Screen size: ${SCREEN_COLS}x${SCREEN_ROWS}"
+    return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Check minimum size
-#------------------------------------------------------------
+#============================================================
 
 screen_check_size()
 {
+    screen_update_size || \
+        return 1
+
     if (( SCREEN_ROWS < SCREEN_MIN_ROWS ||
           SCREEN_COLS < SCREEN_MIN_COLS ))
     then
+        logger_warn \
+            "Screen too small: ${SCREEN_COLS}x${SCREEN_ROWS}; minimum ${SCREEN_MIN_COLS}x${SCREEN_MIN_ROWS}"
+
         return 1
     fi
 
     return 0
 }
 
-#------------------------------------------------------------
-# Rows
-#------------------------------------------------------------
+#============================================================
+# Clear complete screen
+#============================================================
 
-screen_rows()
+screen_clear()
 {
-    printf '%s' \
-        "$SCREEN_ROWS"
-}
+    printf \
+        '\033[2J\033[H'
 
-#------------------------------------------------------------
-# Columns
-#------------------------------------------------------------
-
-screen_cols()
-{
-    printf '%s' \
-        "$SCREEN_COLS"
-}
-
-#------------------------------------------------------------
-# Initialize
-#------------------------------------------------------------
-
-screen_init()
-{
-    screen_update_size || \
-        return 1
-
-    SCREEN_INITIALIZED=1
-
-    logger_info \
-        "Screen initialized: ${SCREEN_COLS}x${SCREEN_ROWS}"
-}
-
-#------------------------------------------------------------
-# Refresh dimensions
-#------------------------------------------------------------
-
-screen_refresh_size()
-{
-    screen_update_size || \
-        return 1
+    SCREEN_DIRTY=0
 
     return 0
 }
 
-#------------------------------------------------------------
-# Clear screen
-#------------------------------------------------------------
+#============================================================
+# Clear current line
+#============================================================
 
-screen_clear()
+screen_clear_line()
 {
-    printf '\033[2J'
-    printf '\033[H'
+    printf \
+        '\033[2K'
+
+    return 0
 }
 
-#------------------------------------------------------------
-# Prepare screen
-#------------------------------------------------------------
+#============================================================
+# Clear from cursor to end of screen
+#============================================================
+
+screen_clear_to_end()
+{
+    printf \
+        '\033[J'
+
+    return 0
+}
+
+#============================================================
+# Clear from start of screen to cursor
+#============================================================
+
+screen_clear_to_cursor()
+{
+    printf \
+        '\033[1J'
+
+    return 0
+}
+
+#============================================================
+# Prepare frame
+#============================================================
 
 screen_prepare()
 {
@@ -171,169 +221,316 @@ screen_prepare()
     then
         screen_init || \
             return 1
-    else
-        screen_update_size || \
-            return 1
     fi
+
+    screen_update_size || \
+        return 1
 
     screen_clear
 
-    cursor_home
+    SCREEN_DIRTY=1
 
     return 0
 }
 
-#------------------------------------------------------------
+#============================================================
+# Mark dirty
+#============================================================
+
+screen_mark_dirty()
+{
+    SCREEN_DIRTY=1
+}
+
+#============================================================
+# Mark clean
+#============================================================
+
+screen_mark_clean()
+{
+    SCREEN_DIRTY=0
+}
+
+#============================================================
+# Is dirty
+#============================================================
+
+screen_is_dirty()
+{
+    (( SCREEN_DIRTY ))
+}
+
+#============================================================
 # Refresh
-#------------------------------------------------------------
+#============================================================
 
 screen_refresh()
 {
-    printf ''
-}
+    if (( ! SCREEN_INITIALIZED ))
+    then
+        screen_init || \
+            return 1
+    fi
 
-#------------------------------------------------------------
-# Validate coordinate
-#------------------------------------------------------------
-
-screen_validate_position()
-{
-    local row="${1:-}"
-    local col="${2:-}"
-
-    [[ "$row" =~ ^[1-9][0-9]*$ ]] || \
-        return 1
-
-    [[ "$col" =~ ^[1-9][0-9]*$ ]] || \
-        return 1
-
-    if (( row > SCREEN_ROWS ||
-          col > SCREEN_COLS ))
+    if ! screen_update_size
     then
         return 1
     fi
 
+    #
+    # Bash/terminal output is immediate. The function exists
+    # as the frame synchronization point for the TUI.
+    #
+    if declare -F tui_flush >/dev/null 2>&1
+    then
+        tui_flush || \
+            return 1
+    elif declare -F terminal_flush >/dev/null 2>&1
+    then
+        terminal_flush || \
+            return 1
+    else
+        printf ''
+    fi
+
+    SCREEN_DIRTY=0
+
     return 0
 }
 
-#------------------------------------------------------------
-# Safe move
-#------------------------------------------------------------
+#============================================================
+# Get rows
+#============================================================
 
-screen_move()
+screen_rows()
 {
-    local row="${1:-}"
-    local col="${2:-}"
+    if (( ! SCREEN_INITIALIZED ))
+    then
+        screen_init || \
+            return 1
+    fi
 
-    screen_validate_position \
+    printf '%s' \
+        "$SCREEN_ROWS"
+}
+
+#============================================================
+# Get columns
+#============================================================
+
+screen_cols()
+{
+    if (( ! SCREEN_INITIALIZED ))
+    then
+        screen_init || \
+            return 1
+    fi
+
+    printf '%s' \
+        "$SCREEN_COLS"
+}
+
+#============================================================
+# Center column
+#============================================================
+
+screen_center_col()
+{
+    local width="${1:-0}"
+    local col
+
+    if [[ ! "$width" =~ ^[0-9]+$ ]]
+    then
+        logger_error \
+            "Invalid width: ${width}"
+
+        return 1
+    fi
+
+    if (( ! SCREEN_INITIALIZED ))
+    then
+        screen_init || \
+            return 1
+    fi
+
+    if (( width >= SCREEN_COLS ))
+    then
+        printf '1'
+        return 0
+    fi
+
+    col=$(( (SCREEN_COLS - width) / 2 + 1 ))
+
+    printf '%s' \
+        "$col"
+}
+
+#============================================================
+# Center text
+#============================================================
+
+screen_center_text()
+{
+    local row="${1:-1}"
+    local text="${2-}"
+    local width
+    local col
+
+    width="${#text}"
+
+    col="$(
+        screen_center_col \
+            "$width"
+    )" || \
+        return 1
+
+    cursor_move \
         "$row" \
         "$col" || \
         return 1
 
-    cursor_move \
-        "$row" \
-        "$col"
+    printf '%s' \
+        "$text"
 }
 
-#------------------------------------------------------------
-# Clear line
-#------------------------------------------------------------
+#============================================================
+# Put text
+#============================================================
 
-screen_clear_line()
+screen_put()
 {
-    local row="${1:-}"
-
-    [[ "$row" =~ ^[1-9][0-9]*$ ]] || \
-        return 1
-
-    (( row <= SCREEN_ROWS )) || \
-        return 1
+    local row="${1:-1}"
+    local col="${2:-1}"
+    local text="${3-}"
 
     cursor_move \
         "$row" \
-        1
+        "$col" || \
+        return 1
 
-    cursor_clear_line
+    printf '%s' \
+        "$text"
 }
 
-#------------------------------------------------------------
+#============================================================
 # Clear rectangular area
-#------------------------------------------------------------
+#============================================================
 
 screen_clear_area()
 {
-    local top="${1:-}"
-    local left="${2:-}"
-    local bottom="${3:-}"
-    local right="${4:-}"
+    local row="${1:-1}"
+    local col="${2:-1}"
+    local width="${3:-0}"
+    local height="${4:-0}"
+    local y
+    local x
 
-    local row
-    local width
-
-    [[ "$top" =~ ^[1-9][0-9]*$ ]] || \
-        return 1
-
-    [[ "$left" =~ ^[1-9][0-9]*$ ]] || \
-        return 1
-
-    [[ "$bottom" =~ ^[1-9][0-9]*$ ]] || \
-        return 1
-
-    [[ "$right" =~ ^[1-9][0-9]*$ ]] || \
-        return 1
-
-    if (( bottom < top ||
-          right < left ))
+    if [[ ! "$width" =~ ^[0-9]+$ ||
+          ! "$height" =~ ^[0-9]+$ ]]
     then
+        logger_error \
+            "Invalid area dimensions"
+
         return 1
     fi
 
-    if (( bottom > SCREEN_ROWS ||
-          right > SCREEN_COLS ))
+    if (( width == 0 || height == 0 ))
     then
-        return 1
+        return 0
     fi
 
-    width=$(( right - left + 1 ))
-
-    for (( row=top; row<=bottom; row++ ))
+    for (( y=0; y<height; y++ ))
     do
         cursor_move \
-            "$row" \
-            "$left"
+            "$((row + y))" \
+            "$col" || \
+            return 1
 
-        printf \
-            '%*s' \
-            "$width" \
-            ''
+        for (( x=0; x<width; x++ ))
+        do
+            printf ' '
+        done
     done
+
+    SCREEN_DIRTY=1
+
+    return 0
 }
 
-#------------------------------------------------------------
-# Erase to end of screen
-#------------------------------------------------------------
+#============================================================
+# Draw full-width separator
+#============================================================
 
-screen_clear_to_end()
+screen_hline()
 {
-    printf '\033[0J'
+    local row="${1:-1}"
+    local col="${2:-1}"
+    local width="${3:-0}"
+    local char="${4:--}"
+    local i
+
+    if [[ ! "$width" =~ ^[0-9]+$ ]]
+    then
+        logger_error \
+            "Invalid line width: ${width}"
+
+        return 1
+    fi
+
+    cursor_move \
+        "$row" \
+        "$col" || \
+        return 1
+
+    for (( i=0; i<width; i++ ))
+    do
+        printf '%s' \
+            "$char"
+    done
+
+    SCREEN_DIRTY=1
+
+    return 0
 }
 
-#------------------------------------------------------------
-# Erase to beginning of screen
-#------------------------------------------------------------
+#============================================================
+# Resize notification
+#============================================================
 
-screen_clear_to_start()
+screen_resize()
 {
-    printf '\033[1J'
+    local old_rows="$SCREEN_ROWS"
+    local old_cols="$SCREEN_COLS"
+
+    screen_update_size || \
+        return 1
+
+    if (( old_rows != SCREEN_ROWS ||
+          old_cols != SCREEN_COLS ))
+    then
+        logger_debug \
+            "Terminal resized: ${old_cols}x${old_rows} -> ${SCREEN_COLS}x${SCREEN_ROWS}"
+
+        SCREEN_DIRTY=1
+    fi
+
+    return 0
 }
 
-#------------------------------------------------------------
-# Reset
-#------------------------------------------------------------
+#============================================================
+# Reset screen state
+#============================================================
 
 screen_reset()
 {
-    SCREEN_ROWS=24
-    SCREEN_COLS=80
+    SCREEN_ROWS=0
+    SCREEN_COLS=0
+    SCREEN_DIRTY=1
     SCREEN_INITIALIZED=0
+
+    return 0
 }
+
+#============================================================
+# End
+#============================================================

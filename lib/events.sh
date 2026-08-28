@@ -416,6 +416,7 @@ event_is_navigation()
         "$EVENT_PAGE_DOWN")
             return 0
             ;;
+
         *)
             return 1
             ;;

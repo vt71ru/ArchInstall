@@ -5,225 +5,460 @@
 #------------------------------------------------------------
 #  cursor.sh
 #
-#  Управление курсором терминала.
+#  Управление положением курсора терминала.
 #
 #  Ответственность:
 #   • Перемещение курсора
-#   • Скрытие/показ курсора
-#   • Сохранение позиции
-#   • Восстановление позиции
-#   • Управление строкой
+#   • Сохранение логической позиции
+#   • Восстановление логической позиции
+#   • Очистка строки
+#   • Перемещение относительно текущей позиции
 #
 #  Не содержит:
-#   • Логику меню
-#   • Отрисовку интерфейса
-#   • Обработку событий
+#   • stty
+#   • alternate screen
+#   • show/hide cursor
+#   • обработку клавиш
+#   • логику меню
+#   • installer logic
+#
+#  Зависит от:
+#   • terminal.sh
 #============================================================
 
-[[ -n "${CURSOR_SH_LOADED:-}" ]] && return
+if [[ -n "${CURSOR_SH_LOADED:-}" ]]
+then
+    return 0
+fi
 
 readonly CURSOR_SH_LOADED=1
 
-#------------------------------------------------------------
+#============================================================
 # State
-#------------------------------------------------------------
+#============================================================
 
-CURSOR_SAVED=0
+CURSOR_INITIALIZED=0
 
-#------------------------------------------------------------
-# Validate coordinate
-#------------------------------------------------------------
+CURSOR_ROW=1
+CURSOR_COL=1
 
-cursor_validate_coordinate()
+CURSOR_SAVED_ROW=1
+CURSOR_SAVED_COL=1
+
+#============================================================
+# Validation
+#============================================================
+
+cursor_validate_position()
 {
-    local value="${1:-}"
+    local row="${1:-}"
+    local col="${2:-}"
 
-    [[ "$value" =~ ^[1-9][0-9]*$ ]]
+    if [[ ! "$row" =~ ^[0-9]+$ ]]
+    then
+        logger_error \
+            "Invalid cursor row: ${row}"
+
+        return 1
+    fi
+
+    if [[ ! "$col" =~ ^[0-9]+$ ]]
+    then
+        logger_error \
+            "Invalid cursor column: ${col}"
+
+        return 1
+    fi
+
+    if (( row < 1 ))
+    then
+        logger_error \
+            "Cursor row must be >= 1"
+
+        return 1
+    fi
+
+    if (( col < 1 ))
+    then
+        logger_error \
+            "Cursor column must be >= 1"
+
+        return 1
+    fi
+
+    return 0
 }
 
-cursor_validate_count()
-{
-    local value="${1:-1}"
+#============================================================
+# Initialization
+#============================================================
 
-    [[ "$value" =~ ^[1-9][0-9]*$ ]]
+cursor_init()
+{
+    if (( CURSOR_INITIALIZED ))
+    then
+        return 0
+    fi
+
+    if [[ ! -t 1 ]]
+    then
+        logger_error \
+            "Cursor output requires stdout TTY"
+
+        return 1
+    fi
+
+    CURSOR_ROW=1
+    CURSOR_COL=1
+
+    CURSOR_SAVED_ROW=1
+    CURSOR_SAVED_COL=1
+
+    CURSOR_INITIALIZED=1
+
+    logger_debug \
+        "Cursor initialized"
+
+    return 0
 }
 
-#------------------------------------------------------------
-# Visibility
-#------------------------------------------------------------
-
-cursor_hide()
-{
-    tput civis >/dev/null 2>&1 || \
-        printf '\033[?25l'
-}
-
-cursor_show()
-{
-    tput cnorm >/dev/null 2>&1 || \
-        printf '\033[?25h'
-}
-
-#------------------------------------------------------------
-# Position
-#------------------------------------------------------------
+#============================================================
+# Move to absolute position
+#============================================================
 
 cursor_move()
 {
     local row="${1:-}"
     local col="${2:-}"
 
-    cursor_validate_coordinate "$row" || \
-        return 1
-
-    cursor_validate_coordinate "$col" || \
-        return 1
-
-    printf \
-        '\033[%s;%sH' \
+    if ! cursor_validate_position \
         "$row" \
         "$col"
+    then
+        return 1
+    fi
+
+    printf \
+        '\033[%d;%dH' \
+        "$row" \
+        "$col"
+
+    CURSOR_ROW="$row"
+    CURSOR_COL="$col"
+
+    return 0
 }
+
+#============================================================
+# Alias
+#============================================================
+
+cursor_move_to()
+{
+    cursor_move \
+        "$@"
+}
+
+#============================================================
+# Move home
+#============================================================
 
 cursor_home()
 {
-    printf '\033[H'
+    printf \
+        '\033[H'
+
+    CURSOR_ROW=1
+    CURSOR_COL=1
+
+    return 0
 }
 
-#------------------------------------------------------------
-# Save / restore
-#------------------------------------------------------------
+#============================================================
+# Move up
+#============================================================
 
-cursor_save()
+cursor_up()
 {
-    printf '\0337'
+    local amount="${1:-1}"
 
-    CURSOR_SAVED=1
-}
+    if [[ ! "$amount" =~ ^[0-9]+$ ]]
+    then
+        logger_error \
+            "Invalid cursor up amount: ${amount}"
 
-cursor_restore()
-{
-    if (( CURSOR_SAVED == 0 ))
+        return 1
+    fi
+
+    if (( amount == 0 ))
     then
         return 0
     fi
 
-    printf '\0338'
-
-    CURSOR_SAVED=0
-}
-
-#------------------------------------------------------------
-# Query
-#------------------------------------------------------------
-
-cursor_request_position()
-{
-    printf '\033[6n'
-}
-
-#------------------------------------------------------------
-# Relative movement
-#------------------------------------------------------------
-
-cursor_up()
-{
-    local count="${1:-1}"
-
-    cursor_validate_count \
-        "$count" || \
-        return 1
-
     printf \
-        '\033[%sA' \
-        "$count"
+        '\033[%dA' \
+        "$amount"
+
+    CURSOR_ROW=$((CURSOR_ROW - amount))
+
+    if (( CURSOR_ROW < 1 ))
+    then
+        CURSOR_ROW=1
+    fi
+
+    return 0
 }
+
+#============================================================
+# Move down
+#============================================================
 
 cursor_down()
 {
-    local count="${1:-1}"
+    local amount="${1:-1}"
 
-    cursor_validate_count \
-        "$count" || \
+    if [[ ! "$amount" =~ ^[0-9]+$ ]]
+    then
+        logger_error \
+            "Invalid cursor down amount: ${amount}"
+
         return 1
+    fi
+
+    if (( amount == 0 ))
+    then
+        return 0
+    fi
 
     printf \
-        '\033[%sB' \
-        "$count"
+        '\033[%dB' \
+        "$amount"
+
+    CURSOR_ROW=$((CURSOR_ROW + amount))
+
+    return 0
 }
 
-cursor_right()
-{
-    local count="${1:-1}"
-
-    cursor_validate_count \
-        "$count" || \
-        return 1
-
-    printf \
-        '\033[%sC' \
-        "$count"
-}
+#============================================================
+# Move left
+#============================================================
 
 cursor_left()
 {
-    local count="${1:-1}"
+    local amount="${1:-1}"
 
-    cursor_validate_count \
-        "$count" || \
+    if [[ ! "$amount" =~ ^[0-9]+$ ]]
+    then
+        logger_error \
+            "Invalid cursor left amount: ${amount}"
+
         return 1
+    fi
+
+    if (( amount == 0 ))
+    then
+        return 0
+    fi
 
     printf \
-        '\033[%sD' \
-        "$count"
+        '\033[%dD' \
+        "$amount"
+
+    CURSOR_COL=$((CURSOR_COL - amount))
+
+    if (( CURSOR_COL < 1 ))
+    then
+        CURSOR_COL=1
+    fi
+
+    return 0
 }
 
-#------------------------------------------------------------
-# Line control
-#------------------------------------------------------------
+#============================================================
+# Move right
+#============================================================
 
-cursor_line_start()
+cursor_right()
 {
-    printf '\r'
+    local amount="${1:-1}"
+
+    if [[ ! "$amount" =~ ^[0-9]+$ ]]
+    then
+        logger_error \
+            "Invalid cursor right amount: ${amount}"
+
+        return 1
+    fi
+
+    if (( amount == 0 ))
+    then
+        return 0
+    fi
+
+    printf \
+        '\033[%dC' \
+        "$amount"
+
+    CURSOR_COL=$((CURSOR_COL + amount))
+
+    return 0
 }
+
+#============================================================
+# Save position
+#============================================================
+
+cursor_save()
+{
+    CURSOR_SAVED_ROW="$CURSOR_ROW"
+    CURSOR_SAVED_COL="$CURSOR_COL"
+
+    printf \
+        '\033[s'
+
+    return 0
+}
+
+#============================================================
+# Restore position
+#============================================================
+
+cursor_restore()
+{
+    printf \
+        '\033[u'
+
+    CURSOR_ROW="$CURSOR_SAVED_ROW"
+    CURSOR_COL="$CURSOR_SAVED_COL"
+
+    return 0
+}
+
+#============================================================
+# Clear current line
+#============================================================
 
 cursor_clear_line()
 {
-    printf '\033[2K'
+    printf \
+        '\033[2K'
+
+    return 0
 }
+
+#============================================================
+# Clear to end of line
+#============================================================
 
 cursor_clear_to_end()
 {
-    printf '\033[0K'
+    printf \
+        '\033[K'
+
+    return 0
 }
 
-cursor_clear_to_start()
+#============================================================
+# Clear to beginning of line
+#============================================================
+
+cursor_clear_to_begin()
 {
-    printf '\033[1K'
+    printf \
+        '\033[1K'
+
+    return 0
 }
 
-#------------------------------------------------------------
-# Screen-relative operations
-#------------------------------------------------------------
+#============================================================
+# Move to beginning of current line
+#============================================================
 
-cursor_up_begin()
+cursor_line_begin()
 {
-    local count="${1:-1}"
+    printf \
+        '\r'
 
-    cursor_up \
-        "$count" || \
+    CURSOR_COL=1
+
+    return 0
+}
+
+#============================================================
+# New line
+#============================================================
+
+cursor_newline()
+{
+    printf \
+        '\n'
+
+    CURSOR_ROW=$((CURSOR_ROW + 1))
+    CURSOR_COL=1
+
+    return 0
+}
+
+#============================================================
+# Get current row
+#============================================================
+
+cursor_row()
+{
+    printf \
+        '%s' \
+        "$CURSOR_ROW"
+}
+
+#============================================================
+# Get current column
+#============================================================
+
+cursor_col()
+{
+    printf \
+        '%s' \
+        "$CURSOR_COL"
+}
+
+#============================================================
+# Set logical position without output
+#============================================================
+
+cursor_set_state()
+{
+    local row="${1:-}"
+    local col="${2:-}"
+
+    cursor_validate_position \
+        "$row" \
+        "$col" || \
         return 1
 
-    cursor_line_start
+    CURSOR_ROW="$row"
+    CURSOR_COL="$col"
+
+    return 0
 }
 
-cursor_down_begin()
+#============================================================
+# Reset state
+#============================================================
+
+cursor_reset()
 {
-    local count="${1:-1}"
+    CURSOR_ROW=1
+    CURSOR_COL=1
 
-    cursor_down \
-        "$count" || \
-        return 1
+    CURSOR_SAVED_ROW=1
+    CURSOR_SAVED_COL=1
 
-    cursor_line_start
+    printf \
+        '\033[H'
+
+    return 0
 }
+
+#============================================================
+# End
+#============================================================

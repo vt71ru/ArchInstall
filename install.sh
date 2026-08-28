@@ -63,7 +63,6 @@ then
         'Missing logger module: %s\n' \
         "$LOGGER_MODULE" \
         >&2
-
     exit 1
 fi
 
@@ -117,10 +116,16 @@ load_module()
         *)
             die \
                 "Unknown module type: ${kind}"
-
             return 1
             ;;
     esac
+
+    if [[ -z "$name" ]]
+    then
+        die \
+            "Module name is empty"
+        return 1
+    fi
 
     file="${directory}/${name}"
 
@@ -128,7 +133,6 @@ load_module()
     then
         die \
             "Missing ${kind} module: ${file}"
-
         return 1
     fi
 
@@ -163,7 +167,6 @@ check_root()
     then
         die \
             "Installer must be run as root"
-
         return 1
     fi
 }
@@ -174,7 +177,6 @@ check_arch_environment()
     then
         die \
             "This installer must be run from Arch Linux"
-
         return 1
     fi
 }
@@ -191,7 +193,6 @@ check_project_structure()
         then
             die \
                 "Missing project directory: ${directory}"
-
             return 1
         fi
     done
@@ -200,7 +201,6 @@ check_project_structure()
     then
         die \
             "Target directory /mnt is missing"
-
         return 1
     fi
 }
@@ -211,7 +211,6 @@ check_terminal()
     then
         die \
             "stdin is not a TTY"
-
         return 1
     fi
 
@@ -219,7 +218,6 @@ check_terminal()
     then
         die \
             "stdout is not a TTY"
-
         return 1
     fi
 
@@ -228,27 +226,22 @@ check_terminal()
     then
         die \
             "Unsupported terminal: ${TERM:-unset}"
-
         return 1
     fi
 
-    command -v \
-        tput \
-        >/dev/null 2>&1 || {
+    if ! command -v tput >/dev/null 2>&1
+    then
         die \
             "tput not found"
-
         return 1
-    }
+    fi
 
-    command -v \
-        stty \
-        >/dev/null 2>&1 || {
+    if ! command -v stty >/dev/null 2>&1
+    then
         die \
             "stty not found"
-
         return 1
-    }
+    fi
 }
 
 check_dependencies()
@@ -277,7 +270,6 @@ check_dependencies()
         then
             die \
                 "Missing program: ${command_name}"
-
             return 1
         fi
     done
@@ -305,7 +297,6 @@ detect_boot_mode()
     then
         logger_info \
             "Boot mode loaded from configuration: ${current}"
-
         return 0
     fi
 
@@ -344,7 +335,6 @@ detect_partition_table()
     then
         logger_info \
             "Partition table loaded from configuration: ${current}"
-
         return 0
     fi
 
@@ -362,7 +352,6 @@ detect_partition_table()
         *)
             die \
                 "Cannot determine partition table without valid boot mode"
-
             return 1
             ;;
     esac
@@ -433,9 +422,9 @@ load_core_libraries()
 
 load_installer_modules()
 {
-    #
+    #--------------------------------------------------------
     # Configuration
-    #
+    #--------------------------------------------------------
 
     require_installer \
         welcome.sh
@@ -455,9 +444,9 @@ load_installer_modules()
     require_installer \
         mirrors.sh
 
-    #
+    #--------------------------------------------------------
     # Disk/install pipeline
-    #
+    #--------------------------------------------------------
 
     require_installer \
         disks.sh
@@ -474,9 +463,9 @@ load_installer_modules()
     require_installer \
         packages.sh
 
-    #
+    #--------------------------------------------------------
     # Post-install
-    #
+    #--------------------------------------------------------
 
     require_installer \
         users.sh
@@ -487,23 +476,23 @@ load_installer_modules()
     require_installer \
         services.sh
 
-    #
+    #--------------------------------------------------------
     # Bootloader
-    #
+    #--------------------------------------------------------
 
     require_installer \
         bootloader.sh
 
-    #
+    #--------------------------------------------------------
     # Final
-    #
+    #--------------------------------------------------------
 
     require_installer \
         summary.sh
 
-    #
+    #--------------------------------------------------------
     # Dispatcher MUST be loaded last.
-    #
+    #--------------------------------------------------------
 
     require_installer \
         menu_main.sh
@@ -568,23 +557,26 @@ cleanup()
 {
     local saved_rc=$?
 
+    # Restore TUI first if available.
     if (( TUI_READY ))
     then
-        if declare -F tui_restore \
-            >/dev/null 2>&1
+        if declare -F tui_restore >/dev/null 2>&1
         then
-            tui_restore \
-                || true
+            tui_restore || true
         fi
+    fi
+
+    # terminal.sh provides terminal_restore().
+    if declare -F terminal_restore >/dev/null 2>&1
+    then
+        terminal_restore || true
     fi
 
     if (( LOGGER_READY ))
     then
-        if declare -F logger_close \
-            >/dev/null 2>&1
+        if declare -F logger_close >/dev/null 2>&1
         then
-            logger_close \
-                || true
+            logger_close || true
         fi
     fi
 
@@ -627,13 +619,10 @@ on_error()
         "$function" \
         >&2
 
-    if declare -F logger_exception \
-        >/dev/null 2>&1
+    if declare -F logger_exception >/dev/null 2>&1
     then
-        logger_exception \
-            || true
-    elif declare -F logger_error \
-        >/dev/null 2>&1
+        logger_exception || true
+    elif declare -F logger_error >/dev/null 2>&1
     then
         logger_error \
             "Fatal error: code=${code} file=${source_file} line=${line} function=${function}" \
@@ -691,13 +680,14 @@ trap on_sigterm TERM
 
 main()
 {
-    logger_init || {
+    if ! logger_init
+    then
         printf \
             'Failed to initialize logger\n' \
             >&2
 
         return 1
-    }
+    fi
 
     LOGGER_READY=1
 
@@ -749,7 +739,6 @@ main()
     then
         logger_warn \
             "Loaded configuration is incomplete; installer menu remains available"
-
     fi
 
     #--------------------------------------------------------

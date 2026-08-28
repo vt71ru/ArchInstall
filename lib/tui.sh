@@ -5,20 +5,27 @@
 #------------------------------------------------------------
 #  tui.sh
 #
-#  Базовый слой TUI.
+#  Координация TUI.
 #
 #  Ответственность:
 #   • Инициализация TUI
+#   • Запуск TUI
 #   • Очистка экрана
-#   • Сохранение/восстановление состояния терминала
-#   • Управление режимом альтернативного экрана
-#   • Базовые операции вывода
+#   • Обновление вывода
+#   • Восстановление TUI
+#   • Проверка состояния TUI
 #
 #  Не содержит:
-#   • Логику меню
-#   • Обработку пунктов меню
-#   • Installer logic
-#   • Конкретные виджеты
+#   • stty
+#   • alternate screen
+#   • управление курсором
+#   • обработку клавиш
+#   • логику меню
+#   • отрисовку widgets
+#   • installer logic
+#
+#  Зависит от:
+#   • terminal.sh
 #============================================================
 
 if [[ -n "${TUI_SH_LOADED:-}" ]]
@@ -34,23 +41,6 @@ readonly TUI_SH_LOADED=1
 
 TUI_INITIALIZED=0
 TUI_ACTIVE=0
-TUI_ALT_SCREEN=0
-TUI_SAVED_STTY=''
-
-#============================================================
-# Escape sequences
-#============================================================
-
-TUI_ESC=$'\033'
-
-TUI_CURSOR_HIDE="${TUI_ESC}[?25l"
-TUI_CURSOR_SHOW="${TUI_ESC}[?25h"
-
-TUI_ALT_ENTER="${TUI_ESC}[?1049h"
-TUI_ALT_EXIT="${TUI_ESC}[?1049l"
-
-TUI_CLEAR="${TUI_ESC}[2J${TUI_ESC}[H"
-TUI_CLEAR_LINE="${TUI_ESC}[2K"
 
 #============================================================
 # Initialization
@@ -63,10 +53,26 @@ tui_init()
         return 0
     fi
 
-    if ! [[ -t 0 && -t 1 ]]
+    if ! declare -F terminal_init >/dev/null 2>&1
     then
         logger_error \
-            "TUI requires interactive stdin/stdout"
+            "terminal_init() is not available"
+
+        return 1
+    fi
+
+    if ! declare -F terminal_restore >/dev/null 2>&1
+    then
+        logger_error \
+            "terminal_restore() is not available"
+
+        return 1
+    fi
+
+    if ! terminal_init
+    then
+        logger_error \
+            "Failed to initialize terminal"
 
         return 1
     fi
@@ -80,111 +86,21 @@ tui_init()
 }
 
 #============================================================
-# Save terminal state
-#============================================================
-
-tui_save_terminal()
-{
-    if ! [[ -t 0 ]]
-    then
-        logger_error \
-            "Cannot save terminal state: stdin is not a TTY"
-
-        return 1
-    fi
-
-    TUI_SAVED_STTY="$(
-        stty -g
-    )" || {
-        logger_error \
-            "Failed to save terminal state"
-
-        return 1
-    }
-
-    logger_debug \
-        "Terminal state saved"
-
-    return 0
-}
-
-#============================================================
-# Restore terminal state
-#============================================================
-
-tui_restore_terminal()
-{
-    if [[ -n "${TUI_SAVED_STTY:-}" ]]
-    then
-        stty \
-            "$TUI_SAVED_STTY" \
-            2>/dev/null \
-            || true
-    fi
-
-    return 0
-}
-
-#============================================================
-# Enter alternate screen
-#============================================================
-
-tui_enter_alt_screen()
-{
-    if (( TUI_ALT_SCREEN ))
-    then
-        return 0
-    fi
-
-    printf '%s' \
-        "$TUI_ALT_ENTER"
-
-    TUI_ALT_SCREEN=1
-
-    logger_debug \
-        "Entered alternate screen"
-
-    return 0
-}
-
-#============================================================
-# Leave alternate screen
-#============================================================
-
-tui_leave_alt_screen()
-{
-    if (( ! TUI_ALT_SCREEN ))
-    then
-        return 0
-    fi
-
-    printf '%s' \
-        "$TUI_ALT_EXIT"
-
-    TUI_ALT_SCREEN=0
-
-    logger_debug \
-        "Left alternate screen"
-
-    return 0
-}
-
-#============================================================
-# Activate TUI
+# Start TUI
 #============================================================
 
 tui_start()
 {
-    tui_init || \
-        return 1
+    if (( TUI_ACTIVE ))
+    then
+        return 0
+    fi
 
-    tui_save_terminal || \
-        return 1
-
-    tui_enter_alt_screen
-
-    printf '%s' \
-        "$TUI_CURSOR_HIDE"
+    if (( ! TUI_INITIALIZED ))
+    then
+        tui_init || \
+            return 1
+    fi
 
     TUI_ACTIVE=1
 
@@ -206,45 +122,111 @@ tui_clear()
             return 1
     fi
 
-    printf '%s' \
-        "$TUI_CLEAR"
+    if declare -F screen_clear >/dev/null 2>&1
+    then
+        screen_clear
+        return $?
+    fi
+
+    printf \
+        '\033[2J\033[H'
 
     return 0
 }
 
 #============================================================
-# Clear current line
+# Clear line
 #============================================================
 
 tui_clear_line()
 {
-    printf '%s' \
-        "$TUI_CLEAR_LINE"
+    printf \
+        '\033[2K'
 }
 
 #============================================================
-# Cursor
+# Move cursor
 #============================================================
 
-tui_hide_cursor()
+tui_move_to()
 {
-    printf '%s' \
-        "$TUI_CURSOR_HIDE"
-}
+    local row="${1:-1}"
+    local col="${2:-1}"
 
-tui_show_cursor()
-{
-    printf '%s' \
-        "$TUI_CURSOR_SHOW"
+    if [[ ! "$row" =~ ^[0-9]+$ ||
+          ! "$col" =~ ^[0-9]+$ ]]
+    then
+        logger_error \
+            "Invalid cursor position: row=${row}, col=${col}"
+
+        return 1
+    fi
+
+    printf \
+        '\033[%s;%sH' \
+        "$row" \
+        "$col"
 }
 
 #============================================================
-# Flush output
+# Flush
 #============================================================
 
 tui_flush()
 {
+    if declare -F terminal_flush >/dev/null 2>&1
+    then
+        terminal_flush
+        return $?
+    fi
+
     printf ''
+}
+
+#============================================================
+# Check active state
+#============================================================
+
+tui_is_active()
+{
+    (( TUI_ACTIVE ))
+}
+
+#============================================================
+# Check initialized state
+#============================================================
+
+tui_is_initialized()
+{
+    (( TUI_INITIALIZED ))
+}
+
+#============================================================
+# Refresh
+#============================================================
+
+tui_refresh()
+{
+    tui_flush
+}
+
+#============================================================
+# Stop TUI
+#============================================================
+
+tui_stop()
+{
+    if (( ! TUI_ACTIVE ))
+    then
+        return 0
+    fi
+
+    TUI_ACTIVE=0
+
+    logger_debug \
+        "TUI stopped"
+
+    return 0
 }
 
 #============================================================
@@ -253,18 +235,37 @@ tui_flush()
 
 tui_restore()
 {
-    if (( ! TUI_ACTIVE ))
+    local failed=0
+
+    tui_stop || \
+        failed=1
+
+    if (( TUI_INITIALIZED ))
     then
-        return 0
+        if declare -F terminal_restore >/dev/null 2>&1
+        then
+            if ! terminal_restore
+            then
+                failed=1
+            fi
+        else
+            logger_error \
+                "terminal_restore() is not available"
+
+            failed=1
+        fi
     fi
 
-    tui_show_cursor
-
-    tui_leave_alt_screen
-
-    tui_restore_terminal
-
+    TUI_INITIALIZED=0
     TUI_ACTIVE=0
+
+    if (( failed ))
+    then
+        logger_error \
+            "TUI restoration completed with errors"
+
+        return 1
+    fi
 
     logger_debug \
         "TUI restored"
@@ -279,13 +280,6 @@ tui_restore()
 tui_shutdown()
 {
     tui_restore
-
-    TUI_INITIALIZED=0
-
-    logger_debug \
-        "TUI shutdown"
-
-    return 0
 }
 
 #============================================================

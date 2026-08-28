@@ -1,3 +1,4 @@
+```bash
 #!/usr/bin/env bash
 #
 #============================================================
@@ -5,355 +6,507 @@
 #------------------------------------------------------------
 #  input.sh
 #
-#  Низкоуровневая система ввода TUI.
+#  Ввод данных в TUI.
 #
 #  Ответственность:
-#   • Чтение клавиш в raw mode
-#   • Распознавание escape sequences
-#   • Преобразование клавиш в KEY_*
+#   • Ввод строки
+#   • Ввод числа
+#   • Ввод пароля
+#   • Редактирование текущего значения
+#   • Ограничение длины
+#   • Проверка обязательности
 #
 #  Не содержит:
+#   • Низкоуровневое чтение escape sequences
 #   • Логику меню
-#   • Логику installer
-#   • Обработку бизнес-событий
+#   • Installer logic
+#
+#  Зависит от:
+#   • events.sh
+#   • cursor.sh
+#   • screen.sh
+#   • colors.sh
 #============================================================
 
-[[ -n "${INPUT_SH_LOADED:-}" ]] && return
+if [[ -n "${INPUT_SH_LOADED:-}" ]]
+then
+    return 0
+fi
 
 readonly INPUT_SH_LOADED=1
 
-#------------------------------------------------------------
-# Key constants
-#------------------------------------------------------------
+#============================================================
+# State
+#============================================================
 
-readonly KEY_NONE=""
+INPUT_INITIALIZED=0
 
-readonly KEY_UP="UP"
-readonly KEY_DOWN="DOWN"
-readonly KEY_LEFT="LEFT"
-readonly KEY_RIGHT="RIGHT"
+INPUT_VALUE=""
+INPUT_RESULT=""
 
-readonly KEY_ENTER="ENTER"
-readonly KEY_ESC="ESC"
+#============================================================
+# Initialization
+#============================================================
 
-readonly KEY_SPACE="SPACE"
-readonly KEY_BACKSPACE="BACKSPACE"
-
-readonly KEY_SLASH="SLASH"
-
-readonly KEY_F1="F1"
-readonly KEY_F2="F2"
-
-readonly KEY_TAB="TAB"
-readonly KEY_DELETE="DELETE"
-readonly KEY_HOME="HOME"
-readonly KEY_END="END"
-
-#------------------------------------------------------------
-# Timing
-#------------------------------------------------------------
-
-readonly INPUT_ESCAPE_TIMEOUT="${INPUT_ESCAPE_TIMEOUT:-0.08}"
-
-#------------------------------------------------------------
-# Read first byte
-#------------------------------------------------------------
-
-input_read_raw()
+input_init()
 {
-    local key=""
-
-    IFS= read \
-        -rsn1 \
-        key
-
-    printf '%s' \
-        "$key"
-}
-
-#------------------------------------------------------------
-# Read escape sequence remainder
-#------------------------------------------------------------
-
-input_read_escape()
-{
-    local sequence=""
-    local byte=""
-
-    if ! IFS= read \
-        -rsn1 \
-        -t "$INPUT_ESCAPE_TIMEOUT" \
-        byte
+    if (( INPUT_INITIALIZED ))
     then
-        printf '%s' \
-            "$KEY_ESC"
-
         return 0
     fi
 
-    sequence+="$byte"
+    if ! declare -F event_read >/dev/null 2>&1
+    then
+        logger_error \
+            "event_read() is not available"
 
-    case "$sequence" in
-        '[')
-            if ! IFS= read \
-                -rsn1 \
-                -t "$INPUT_ESCAPE_TIMEOUT" \
-                byte
-            then
-                printf '%s' \
-                    "$KEY_ESC"
+        return 1
+    fi
 
-                return 0
-            fi
+    if ! declare -F cursor_move >/dev/null 2>&1
+    then
+        logger_error \
+            "cursor_move() is not available"
 
-            sequence+="$byte"
+        return 1
+    fi
 
-            case "$sequence" in
-                '[A')
-                    printf '%s' \
-                        "$KEY_UP"
-                    ;;
-                '[B')
-                    printf '%s' \
-                        "$KEY_DOWN"
-                    ;;
-                '[C')
-                    printf '%s' \
-                        "$KEY_RIGHT"
-                    ;;
-                '[D')
-                    printf '%s' \
-                        "$KEY_LEFT"
-                    ;;
-                '[H')
-                    printf '%s' \
-                        "$KEY_HOME"
-                    ;;
-                '[F')
-                    printf '%s' \
-                        "$KEY_END"
-                    ;;
-                *)
-                    input_read_csi "$sequence"
-                    ;;
-            esac
-            ;;
-        'O')
-            if ! IFS= read \
-                -rsn1 \
-                -t "$INPUT_ESCAPE_TIMEOUT" \
-                byte
-            then
-                printf '%s' \
-                    "$KEY_ESC"
+    INPUT_INITIALIZED=1
 
-                return 0
-            fi
+    logger_debug \
+        "Input subsystem initialized"
 
-            sequence+="$byte"
-
-            case "$sequence" in
-                'OP')
-                    printf '%s' \
-                        "$KEY_F1"
-                    ;;
-                'OQ')
-                    printf '%s' \
-                        "$KEY_F2"
-                    ;;
-                *)
-                    printf '%s' \
-                        "$KEY_ESC"
-                    ;;
-            esac
-            ;;
-        *)
-            printf '%s' \
-                "$KEY_ESC"
-            ;;
-    esac
+    return 0
 }
 
-#------------------------------------------------------------
-# Read CSI sequence
-#------------------------------------------------------------
+#============================================================
+# Redraw input field
+#============================================================
 
-input_read_csi()
+input_draw()
 {
-    local sequence="$1"
-    local byte=""
+    local row="${1:-1}"
+    local col="${2:-1}"
+    local width="${3:-20}"
+    local value="${4-}"
+    local hidden="${5:-0}"
 
-    while [[ "$sequence" != *'~' &&
-            "$sequence" != *'A' &&
-            "$sequence" != *'B' &&
-            "$sequence" != *'C' &&
-            "$sequence" != *'D' &&
-            "$sequence" != *'H' &&
-            "$sequence" != *'F' ]]
-    do
-        if ! IFS= read \
-            -rsn1 \
-            -t "$INPUT_ESCAPE_TIMEOUT" \
-            byte
-        then
-            printf '%s' \
-                "$KEY_ESC"
+    local display=""
+    local visible_length
+    local padding
+    local i
 
-            return 0
-        fi
+    if [[ "$hidden" == "1" ]]
+    then
+        for (( i=0; i<${#value}; i++ ))
+        do
+            display+="*"
+        done
+    else
+        display="$value"
+    fi
 
-        sequence+="$byte"
+    visible_length="${#display}"
 
-        if (( ${#sequence} > 16 ))
-        then
-            printf '%s' \
-                "$KEY_ESC"
+    if (( visible_length > width ))
+    then
+        display="${display:0:width}"
+        visible_length="$width"
+    fi
 
-            return 0
-        fi
-    done
+    padding=$((width - visible_length))
 
-    case "$sequence" in
-        '[1;5A'|'[1;2A')
-            printf '%s' \
-                "$KEY_UP"
-            ;;
-        '[1;5B'|'[1;2B')
-            printf '%s' \
-                "$KEY_DOWN"
-            ;;
-        '[1;5C'|'[1;2C')
-            printf '%s' \
-                "$KEY_RIGHT"
-            ;;
-        '[1;5D'|'[1;2D')
-            printf '%s' \
-                "$KEY_LEFT"
-            ;;
-        '[15~')
-            printf '%s' \
-                "$KEY_F5"
-            ;;
-        '[17~')
-            printf '%s' \
-                "$KEY_F6"
-            ;;
-        '[18~')
-            printf '%s' \
-                "$KEY_F7"
-            ;;
-        '[19~')
-            printf '%s' \
-                "$KEY_F8"
-            ;;
-        '[20~')
-            printf '%s' \
-                "$KEY_F9"
-            ;;
-        '[21~')
-            printf '%s' \
-                "$KEY_F10"
-            ;;
-        '[3~')
-            printf '%s' \
-                "$KEY_DELETE"
-            ;;
-        '[2~')
-            printf '%s' \
-                "$KEY_INSERT"
-            ;;
-        *)
-            case "$sequence" in
-                '[A')
-                    printf '%s' \
-                        "$KEY_UP"
-                    ;;
-                '[B')
-                    printf '%s' \
-                        "$KEY_DOWN"
-                    ;;
-                '[C')
-                    printf '%s' \
-                        "$KEY_RIGHT"
-                    ;;
-                '[D')
-                    printf '%s' \
-                        "$KEY_LEFT"
-                    ;;
-                '[H')
-                    printf '%s' \
-                        "$KEY_HOME"
-                    ;;
-                '[F')
-                    printf '%s' \
-                        "$KEY_END"
-                    ;;
-                *)
-                    printf '%s' \
-                        "$KEY_ESC"
-                    ;;
-            esac
-            ;;
-    esac
-}
-
-#------------------------------------------------------------
-# Decode single key
-#------------------------------------------------------------
-
-input_decode()
-{
-    local key="${1-}"
-
-    case "$key" in
-        $'\e')
-            input_read_escape
-            ;;
-        "")
-            printf '%s' \
-                "$KEY_ENTER"
-            ;;
-        ' ')
-            printf '%s' \
-                "$KEY_SPACE"
-            ;;
-        $'\t')
-            printf '%s' \
-                "$KEY_TAB"
-            ;;
-        $'\177'|$'\b')
-            printf '%s' \
-                "$KEY_BACKSPACE"
-            ;;
-        '/')
-            printf '%s' \
-                "$KEY_SLASH"
-            ;;
-        *)
-            printf '%s' \
-                "$key"
-            ;;
-    esac
-}
-
-#------------------------------------------------------------
-# Public read
-#------------------------------------------------------------
-
-input_read()
-{
-    local raw
-    local decoded
-
-    raw="$(
-        input_read_raw
-    )"
-
-    decoded="$(
-        input_decode \
-            "$raw"
-    )"
+    cursor_move \
+        "$row" \
+        "$col" || \
+        return 1
 
     printf '%s' \
-        "$decoded"
+        "$display"
+
+    for (( i=0; i<padding; i++ ))
+    do
+        printf ' '
+    done
+
+    return 0
 }
+
+#============================================================
+# Set result
+#============================================================
+
+input_set_result()
+{
+    INPUT_RESULT="${1-}"
+}
+
+#============================================================
+# Get result
+#============================================================
+
+input_get_result()
+{
+    printf '%s' \
+        "$INPUT_RESULT"
+}
+
+#============================================================
+# Generic line input
+#============================================================
+
+input_read_line()
+{
+    local row="${1:-1}"
+    local col="${2:-1}"
+    local width="${3:-40}"
+    local initial="${4-}"
+    local prompt="${5-}"
+    local required="${6:-0}"
+    local max_length="${7:-0}"
+
+    local value="$initial"
+    local event
+    local key
+    local char
+    local done=0
+
+    input_init || \
+        return 1
+
+    if ! [[ "$row" =~ ^[0-9]+$ &&
+            "$col" =~ ^[0-9]+$ &&
+            "$width" =~ ^[0-9]+$ &&
+            "$required" =~ ^[01]$ &&
+            "$max_length" =~ ^[0-9]+$ ]]
+    then
+        logger_error \
+            "Invalid input_read_line arguments"
+
+        return 1
+    fi
+
+    if (( width == 0 ))
+    then
+        logger_error \
+            "Input width must be greater than zero"
+
+        return 1
+    fi
+
+    while (( ! done ))
+    do
+        if [[ -n "$prompt" ]]
+        then
+            cursor_move \
+                "$row" \
+                "$col" || \
+                return 1
+
+            printf '%s' \
+                "$prompt"
+
+            input_draw \
+                "$row" \
+                "$((col + ${#prompt}))" \
+                "$width" \
+                "$value"
+        else
+            input_draw \
+                "$row" \
+                "$col" \
+                "$width" \
+                "$value"
+        fi
+
+        event="$(
+            event_read
+        )"
+
+        case "$event"
+        in
+            "$EVENT_SELECT")
+                if [[ "$required" == "1" &&
+                      -z "$value" ]]
+                then
+                    logger_debug \
+                        "Required input is empty"
+
+                    continue
+                fi
+
+                INPUT_RESULT="$value"
+                done=1
+                ;;
+
+            "$EVENT_BACK")
+                return 1
+                ;;
+
+            "$EVENT_DELETE")
+                if [[ -n "$value" ]]
+                then
+                    value="${value:0:${#value}-1}"
+                fi
+                ;;
+
+            "$EVENT_SPACE")
+                char=' '
+
+                if (( max_length == 0 ||
+                      ${#value} < max_length ))
+                then
+                    value+="$char"
+                fi
+                ;;
+
+            "$EVENT_TAB")
+                char=$'\t'
+
+                if (( max_length == 0 ||
+                      ${#value} < max_length ))
+                then
+                    value+="$char"
+                fi
+                ;;
+
+            "$EVENT_NONE")
+                #
+                # event_read() intentionally returns NONE for
+                # ordinary printable characters in the current
+                # architecture. Therefore raw character input
+                # requires a dedicated character reader.
+                #
+                continue
+                ;;
+        esac
+    done
+
+    return 0
+}
+
+#============================================================
+# Read single character
+#============================================================
+
+input_read_char()
+{
+    local character
+
+    input_init || \
+        return 1
+
+    if ! IFS= read \
+        -rsn1 \
+        character
+    then
+        return 1
+    fi
+
+    INPUT_RESULT="$character"
+
+    return 0
+}
+
+#============================================================
+# Read integer
+#============================================================
+
+input_read_number()
+{
+    local row="${1:-1}"
+    local col="${2:-1}"
+    local width="${3:-20}"
+    local initial="${4-}"
+    local prompt="${5-}"
+    local required="${6:-0}"
+    local max_length="${7:-0}"
+
+    local value="$initial"
+    local event
+    local done=0
+
+    input_init || \
+        return 1
+
+    while (( ! done ))
+    do
+        if [[ -n "$prompt" ]]
+        then
+            cursor_move \
+                "$row" \
+                "$col" || \
+                return 1
+
+            printf '%s' \
+                "$prompt"
+
+            input_draw \
+                "$row" \
+                "$((col + ${#prompt}))" \
+                "$width" \
+                "$value"
+        else
+            input_draw \
+                "$row" \
+                "$col" \
+                "$width" \
+                "$value"
+        fi
+
+        event="$(
+            event_read
+        )"
+
+        case "$event"
+        in
+            "$EVENT_SELECT")
+                if [[ "$required" == "1" &&
+                      -z "$value" ]]
+                then
+                    continue
+                fi
+
+                if [[ -n "$value" &&
+                      ! "$value" =~ ^[0-9]+$ ]]
+                then
+                    continue
+                fi
+
+                INPUT_RESULT="$value"
+                done=1
+                ;;
+
+            "$EVENT_BACK")
+                return 1
+                ;;
+
+            "$EVENT_DELETE")
+                if [[ -n "$value" ]]
+                then
+                    value="${value:0:${#value}-1}"
+                fi
+                ;;
+
+            "$EVENT_NONE")
+                #
+                # Printable numeric characters are not emitted by
+                # the current event abstraction.
+                #
+                continue
+                ;;
+        esac
+    done
+
+    return 0
+}
+
+#============================================================
+# Read password
+#============================================================
+
+input_read_password()
+{
+    local row="${1:-1}"
+    local col="${2:-1}"
+    local width="${3:-40}"
+    local required="${4:-1}"
+    local prompt="${5:-Password:}"
+
+    local value=""
+    local event
+    local done=0
+    local display_col
+
+    input_init || \
+        return 1
+
+    display_col=$((col + ${#prompt}))
+
+    while (( ! done ))
+    do
+        cursor_move \
+            "$row" \
+            "$col" || \
+            return 1
+
+        printf '%s' \
+            "$prompt"
+
+        input_draw \
+            "$row" \
+            "$display_col" \
+            "$width" \
+            "$value" \
+            1
+
+        event="$(
+            event_read
+        )"
+
+        case "$event"
+        in
+            "$EVENT_SELECT")
+                if [[ "$required" == "1" &&
+                      -z "$value" ]]
+                then
+                    continue
+                fi
+
+                INPUT_RESULT="$value"
+                done=1
+                ;;
+
+            "$EVENT_BACK")
+                return 1
+                ;;
+
+            "$EVENT_DELETE")
+                if [[ -n "$value" ]]
+                then
+                    value="${value:0:${#value}-1}"
+                fi
+                ;;
+
+            "$EVENT_NONE")
+                continue
+                ;;
+        esac
+    done
+
+    return 0
+}
+
+#============================================================
+# Validate result as number
+#============================================================
+
+input_result_is_number()
+{
+    [[ "$INPUT_RESULT" =~ ^[0-9]+$ ]]
+}
+
+#============================================================
+# Validate result as non-empty
+#============================================================
+
+input_result_is_nonempty()
+{
+    [[ -n "$INPUT_RESULT" ]]
+}
+
+#============================================================
+# Clear result
+#============================================================
+
+input_reset()
+{
+    INPUT_VALUE=""
+    INPUT_RESULT=""
+
+    return 0
+}
+
+#============================================================
+# End
+#============================================================

@@ -8,11 +8,12 @@
 # Центральный controller установки.
 #
 # Ответственность:
-#   • Управление этапами установки
-#   • Загрузка installer-модулей
-#   • Контроль последовательности
-#   • Обработка ошибок этапов
-#   • Возврат результата
+#   • загрузка installer-модулей
+#   • проверка entry point
+#   • выполнение отдельных этапов
+#   • выполнение полной установки
+#   • контроль порядка этапов
+#   • возврат кодов ошибок
 #
 # Не содержит:
 #   • TTY logic
@@ -22,6 +23,7 @@
 #   • partition implementation
 #   • filesystem implementation
 #   • package implementation
+#   • bootloader implementation
 #
 #============================================================
 
@@ -56,7 +58,7 @@ INSTALLER_LAST_RC=0
 installer_load_module()
 {
     local module="${1:-}"
-    local file="$INSTALLER_DIR/$module"
+    local file
 
     if [[ -z "$module" ]]
     then
@@ -65,6 +67,8 @@ installer_load_module()
 
         return 1
     fi
+
+    file="$INSTALLER_DIR/$module"
 
     if [[ ! -f "$file" ]]
     then
@@ -78,7 +82,13 @@ installer_load_module()
         "Installer: loading module: $module"
 
     # shellcheck disable=SC1090
-    source "$file"
+    if ! source "$file"
+    then
+        logger_error \
+            "Installer: failed to load module: $file"
+
+        return 1
+    fi
 
     return 0
 }
@@ -125,47 +135,53 @@ installer_run_stage()
     logger_info \
         "Starting stage: $stage"
 
-    #
-    # Load module.
-    #
+    #--------------------------------------------------------
+    # Load module
+    #--------------------------------------------------------
+
     if ! installer_load_module "$module"
     then
         logger_error \
             "Stage '$stage': failed to load $module"
 
+        INSTALLER_LAST_RC=1
+
         return 1
     fi
 
-    #
-    # Check entry function.
-    #
+    #--------------------------------------------------------
+    # Check entry point
+    #--------------------------------------------------------
+
     if ! installer_require_function "$function_name"
     then
         logger_error \
             "Stage '$stage': entry point missing: $function_name"
 
+        INSTALLER_LAST_RC=1
+
         return 1
     fi
 
-    #
-    # Execute stage.
-    #
-    if "$function_name"
-    then
-        INSTALLER_LAST_RC=0
+    #--------------------------------------------------------
+    # Execute stage
+    #--------------------------------------------------------
 
-        logger_info \
-            "Stage completed: $stage"
-
-        return 0
-    fi
-
+    "$function_name"
     INSTALLER_LAST_RC=$?
 
-    logger_error \
-        "Stage failed: $stage (rc=$INSTALLER_LAST_RC)"
+    if (( INSTALLER_LAST_RC != 0 ))
+    then
+        logger_error \
+            "Stage failed: $stage (rc=$INSTALLER_LAST_RC)"
 
-    return "$INSTALLER_LAST_RC"
+        return "$INSTALLER_LAST_RC"
+    fi
+
+    logger_info \
+        "Stage completed: $stage"
+
+    return 0
 }
 
 #============================================================
@@ -177,7 +193,7 @@ installer_partition()
     installer_run_stage \
         "Partition" \
         "partition.sh" \
-        "partition_main"
+        "partition"
 }
 
 #============================================================
@@ -189,7 +205,7 @@ installer_filesystem()
     installer_run_stage \
         "Filesystem" \
         "filesystem.sh" \
-        "filesystem_main"
+        "filesystem"
 }
 
 #============================================================
@@ -201,7 +217,7 @@ installer_mount()
     installer_run_stage \
         "Mount" \
         "mount.sh" \
-        "mount_main"
+        "mount"
 }
 
 #============================================================
@@ -213,7 +229,7 @@ installer_packages()
     installer_run_stage \
         "Packages" \
         "packages.sh" \
-        "packages_main"
+        "packages_install"
 }
 
 #============================================================
@@ -225,7 +241,7 @@ installer_bootloader()
     installer_run_stage \
         "Bootloader" \
         "bootloader.sh" \
-        "bootloader_main"
+        "bootloader"
 }
 
 #============================================================
@@ -237,11 +253,10 @@ installer_run()
     logger_info \
         "Starting full Arch Linux installation"
 
-    #
     #--------------------------------------------------------
     # 1. Partition
     #--------------------------------------------------------
-    #
+
     if ! installer_partition
     then
         logger_error \
@@ -250,11 +265,10 @@ installer_run()
         return 1
     fi
 
-    #
     #--------------------------------------------------------
     # 2. Filesystem
     #--------------------------------------------------------
-    #
+
     if ! installer_filesystem
     then
         logger_error \
@@ -263,11 +277,10 @@ installer_run()
         return 1
     fi
 
-    #
     #--------------------------------------------------------
     # 3. Mount
     #--------------------------------------------------------
-    #
+
     if ! installer_mount
     then
         logger_error \
@@ -276,11 +289,10 @@ installer_run()
         return 1
     fi
 
-    #
     #--------------------------------------------------------
     # 4. Packages
     #--------------------------------------------------------
-    #
+
     if ! installer_packages
     then
         logger_error \
@@ -289,11 +301,10 @@ installer_run()
         return 1
     fi
 
-    #
     #--------------------------------------------------------
     # 5. Bootloader
     #--------------------------------------------------------
-    #
+
     if ! installer_bootloader
     then
         logger_error \
@@ -310,7 +321,3 @@ installer_run()
 
     return 0
 }
-
-#============================================================
-# End
-#============================================================

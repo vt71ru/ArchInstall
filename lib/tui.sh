@@ -1230,19 +1230,11 @@ event_get_char()
 
 event_is_navigation()
 {
-    case "${1:-}"
-    in
-        "$EVENT_UP"|
-        "$EVENT_DOWN"|
-        "$EVENT_LEFT"|
-        "$EVENT_RIGHT"|
-        "$EVENT_HOME"|
-        "$EVENT_END"|
-        "$EVENT_PAGE_UP"|
-        "$EVENT_PAGE_DOWN")
+    case "${1:-}" in
+        "$EVENT_UP"|"$EVENT_DOWN"|"$EVENT_LEFT"|"$EVENT_RIGHT"|\
+        "$EVENT_HOME"|"$EVENT_END"|"$EVENT_PAGE_UP"|"$EVENT_PAGE_DOWN")
             return 0
             ;;
-
         *)
             return 1
             ;;

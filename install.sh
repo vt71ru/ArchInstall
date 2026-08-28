@@ -63,6 +63,7 @@ then
         'Missing logger module: %s\n' \
         "$LOGGER_MODULE" \
         >&2
+
     exit 1
 fi
 
@@ -110,9 +111,11 @@ load_module()
         lib)
             directory="$LIB_DIR"
             ;;
+
         installer)
             directory="$INSTALLER_DIR"
             ;;
+
         *)
             die \
                 "Unknown module type: ${kind}"
@@ -163,7 +166,7 @@ require_installer()
 
 check_root()
 {
-    if [[ "$EUID" -ne 0 ]]
+    if (( EUID != 0 ))
     then
         die \
             "Installer must be run as root"
@@ -258,6 +261,11 @@ check_dependencies()
         tput
         stty
         base64
+        mktemp
+        mv
+        rm
+        chmod
+        dirname
     )
 
     local command_name
@@ -288,7 +296,8 @@ detect_boot_mode()
     local current
 
     current="$(
-        config_get BOOT_MODE \
+        config_get \
+            BOOT_MODE \
             2>/dev/null \
             || true
     )"
@@ -297,6 +306,7 @@ detect_boot_mode()
     then
         logger_info \
             "Boot mode loaded from configuration: ${current}"
+
         return 0
     fi
 
@@ -326,7 +336,8 @@ detect_partition_table()
     local table
 
     current="$(
-        config_get PARTITION_TABLE \
+        config_get \
+            PARTITION_TABLE \
             2>/dev/null \
             || true
     )"
@@ -335,20 +346,24 @@ detect_partition_table()
     then
         logger_info \
             "Partition table loaded from configuration: ${current}"
+
         return 0
     fi
 
     boot_mode="$(
-        config_get BOOT_MODE
+        config_get \
+            BOOT_MODE
     )"
 
     case "$boot_mode" in
         UEFI)
             table="GPT"
             ;;
+
         BIOS)
             table="MBR"
             ;;
+
         *)
             die \
                 "Cannot determine partition table without valid boot mode"
@@ -422,80 +437,29 @@ load_core_libraries()
 
 load_installer_modules()
 {
-    #--------------------------------------------------------
-    # Configuration
-    #--------------------------------------------------------
+    require_installer welcome.sh
+    require_installer keyboard.sh
+    require_installer locale.sh
+    require_installer locale_generate.sh
+    require_installer network.sh
+    require_installer mirrors.sh
 
-    require_installer \
-        welcome.sh
+    require_installer disks.sh
+    require_installer partition.sh
+    require_installer filesystem.sh
+    require_installer mount.sh
+    require_installer packages.sh
 
-    require_installer \
-        keyboard.sh
+    require_installer users.sh
+    require_installer desktop.sh
+    require_installer services.sh
 
-    require_installer \
-        locale.sh
+    require_installer bootloader.sh
 
-    require_installer \
-        locale_generate.sh
+    require_installer summary.sh
 
-    require_installer \
-        network.sh
-
-    require_installer \
-        mirrors.sh
-
-    #--------------------------------------------------------
-    # Disk/install pipeline
-    #--------------------------------------------------------
-
-    require_installer \
-        disks.sh
-
-    require_installer \
-        partition.sh
-
-    require_installer \
-        filesystem.sh
-
-    require_installer \
-        mount.sh
-
-    require_installer \
-        packages.sh
-
-    #--------------------------------------------------------
-    # Post-install
-    #--------------------------------------------------------
-
-    require_installer \
-        users.sh
-
-    require_installer \
-        desktop.sh
-
-    require_installer \
-        services.sh
-
-    #--------------------------------------------------------
-    # Bootloader
-    #--------------------------------------------------------
-
-    require_installer \
-        bootloader.sh
-
-    #--------------------------------------------------------
-    # Final
-    #--------------------------------------------------------
-
-    require_installer \
-        summary.sh
-
-    #--------------------------------------------------------
     # Dispatcher MUST be loaded last.
-    #--------------------------------------------------------
-
-    require_installer \
-        menu_main.sh
+    require_installer menu_main.sh
 
     logger_info \
         "Installer modules loaded"
@@ -557,7 +521,6 @@ cleanup()
 {
     local saved_rc=$?
 
-    # Restore TUI first if available.
     if (( TUI_READY ))
     then
         if declare -F tui_restore >/dev/null 2>&1
@@ -566,7 +529,6 @@ cleanup()
         fi
     fi
 
-    # terminal.sh provides terminal_restore().
     if declare -F terminal_restore >/dev/null 2>&1
     then
         terminal_restore || true
@@ -622,6 +584,7 @@ on_error()
     if declare -F logger_exception >/dev/null 2>&1
     then
         logger_exception || true
+
     elif declare -F logger_error >/dev/null 2>&1
     then
         logger_error \
@@ -645,18 +608,24 @@ on_error()
 
 on_sigint()
 {
-    logger_warn \
-        "Interrupted (SIGINT)" \
-        || true
+    if declare -F logger_warn >/dev/null 2>&1
+    then
+        logger_warn \
+            "Interrupted (SIGINT)" \
+            || true
+    fi
 
     exit 130
 }
 
 on_sigterm()
 {
-    logger_warn \
-        "Terminated (SIGTERM)" \
-        || true
+    if declare -F logger_warn >/dev/null 2>&1
+    then
+        logger_warn \
+            "Terminated (SIGTERM)" \
+            || true
+    fi
 
     exit 143
 }
@@ -668,7 +637,7 @@ on_sigterm()
 trap cleanup EXIT
 
 trap \
-    'on_error "$?" "$LINENO" "${BASH_SOURCE[0]}" "${FUNCNAME[1]:-main}"' \
+    'rc=$?; on_error "$rc" "$LINENO" "${BASH_SOURCE[0]}" "${FUNCNAME[1]:-main}"' \
     ERR
 
 trap on_sigint INT
@@ -697,10 +666,6 @@ main()
     logger_info \
         "Project root: ${ROOT_DIR}"
 
-    #--------------------------------------------------------
-    # Environment
-    #--------------------------------------------------------
-
     check_root
 
     check_arch_environment
@@ -711,29 +676,13 @@ main()
 
     check_dependencies
 
-    #--------------------------------------------------------
-    # Core
-    #--------------------------------------------------------
-
     load_core_libraries
 
-    #--------------------------------------------------------
-    # Configuration
-    #--------------------------------------------------------
-
     config_init_load
-
-    #--------------------------------------------------------
-    # Platform defaults
-    #--------------------------------------------------------
 
     detect_boot_mode
 
     detect_partition_table
-
-    #--------------------------------------------------------
-    # Validate restored configuration
-    #--------------------------------------------------------
 
     if ! config_validate
     then
@@ -741,23 +690,11 @@ main()
             "Loaded configuration is incomplete; installer menu remains available"
     fi
 
-    #--------------------------------------------------------
-    # Installer modules
-    #--------------------------------------------------------
-
     load_installer_modules
-
-    #--------------------------------------------------------
-    # TUI
-    #--------------------------------------------------------
 
     app_init
 
     draw_startup
-
-    #--------------------------------------------------------
-    # Main menu
-    #--------------------------------------------------------
 
     logger_info \
         "Entering main menu"

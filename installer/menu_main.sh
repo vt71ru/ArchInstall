@@ -1,30 +1,32 @@
-```bash
 #!/usr/bin/env bash
 #
 #============================================================
-#  Arch Installer
+# Arch Installer
 #------------------------------------------------------------
-#  menu_main.sh
+# menu_main.sh
 #
-#  Главное меню установщика.
+# Главное меню Arch Installer.
 #
-#  Ответственность:
+# Ответственность:
 #   • Отображение главного меню
 #   • Навигация
 #   • Запуск installer-модулей
-#   • Отображение текущего состояния конфигурации
-#   • Выход из установщика
+#   • Возврат результата
 #
-#  Не содержит:
-#   • Логику установки
-#   • Разметку диска
-#   • Форматирование
-#   • Монтирование
-#   • Установку пакетов
+# Не содержит:
+#   • TTY logic
+#   • stty
+#   • ANSI-коды
+#   • keyboard parsing
+#   • drawing implementation
+#   • partition logic
+#   • filesystem logic
+#   • package logic
+#   • bootloader logic
 #
-#  Зависит от:
-#   • config.sh
+# Зависимости:
 #   • tui.sh
+#
 #============================================================
 
 if [[ -n "${MENU_MAIN_SH_LOADED:-}" ]]
@@ -35,455 +37,330 @@ fi
 readonly MENU_MAIN_SH_LOADED=1
 
 #============================================================
-# State
+# Paths
 #============================================================
 
-MENU_SELECTED=0
+MENU_MAIN_ROOT="${INSTALLER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
+readonly MENU_MAIN_ROOT
+
+MENU_MAIN_MODULES="$MENU_MAIN_ROOT/modules"
+
+readonly MENU_MAIN_MODULES
 
 #============================================================
-# Menu entries
+# Module loader
 #============================================================
 
-declare -ga MAIN_MENU_ITEMS=(
-    "Welcome"
-    "Keyboard"
-    "Locale"
-    "Network"
-    "Mirrors"
-    "Disk"
-    "Partition"
-    "Filesystem"
-    "Mount"
-    "Packages"
-    "Users"
-    "Desktop"
-    "Services"
-    "Bootloader"
-    "Summary"
-    "Install"
-    "Exit"
-)
-
-#============================================================
-# Initialization
-#============================================================
-
-menu_main_init()
+menu_main_load_module()
 {
-    MENU_SELECTED=0
+    local module="$1"
+    local file="$MENU_MAIN_MODULES/$module"
+
+    if [[ ! -f "$file" ]]
+    then
+        logger_error \
+            "Main menu: module not found: $file"
+
+        return 1
+    fi
+
+    # shellcheck disable=SC1090
+    source "$file"
 
     return 0
 }
 
 #============================================================
-# Status helper
+# Header
 #============================================================
 
-menu_main_status()
+menu_main_header()
 {
-    local key="${1:-}"
-    local value
-
-    value="$(
-        config_get \
-            "$key" \
-            2>/dev/null ||
-            true
-    )"
-
-    [[ -n "$value" ]] || \
-        value="-"
-
-    printf '%s' \
-        "$value"
-}
-
-#============================================================
-# Draw configuration summary
-#============================================================
-
-menu_main_draw_status()
-{
-    local row=4
-
-    tui_move \
-        "$row" \
-        4
-
-    color_title \
-        "Current configuration"
-
-    row=$((row + 1))
-
-    tui_move "$row" 4
-    printf 'Boot mode      : %s' \
-        "$(menu_main_status BOOT_MODE)"
-
-    row=$((row + 1))
-
-    tui_move "$row" 4
-    printf 'Partition table: %s' \
-        "$(menu_main_status PARTITION_TABLE)"
-
-    row=$((row + 1))
-
-    tui_move "$row" 4
-    printf 'Target disk    : %s' \
-        "$(menu_main_status TARGET_DISK)"
-
-    row=$((row + 1))
-
-    tui_move "$row" 4
-    printf 'Filesystem     : %s' \
-        "$(menu_main_status FILESYSTEM)"
-
-    row=$((row + 1))
-
-    tui_move "$row" 4
-    printf 'Locale         : %s' \
-        "$(menu_main_status LOCALE)"
-
-    row=$((row + 1))
-
-    tui_move "$row" 4
-    printf 'User           : %s' \
-        "$(menu_main_status USER_NAME)"
-
-    row=$((row + 1))
-
-    tui_move "$row" 4
-    printf 'Hostname       : %s' \
-        "$(menu_main_status HOSTNAME)"
-}
-
-#============================================================
-# Draw menu
-#============================================================
-
-menu_main_draw()
-{
-    local start_row=13
-    local index
-
-    screen_prepare || \
-        return 1
+    tui_clear
 
     titlebar_draw \
         "Arch Installer"
 
-    menu_main_draw_status
+    tui_move 3 5
 
-    draw_box \
-        12 \
-        2 \
-        "$((TUI_COLS - 4))" \
-        "$(( ${#MAIN_MENU_ITEMS[@]} + 3 ))"
+    color_info \
+        "Arch Linux Installation System"
 
-    for index in "${!MAIN_MENU_ITEMS[@]}"
-    do
-        tui_move \
-            "$((start_row + index))" \
-            5
+    tui_move 4 5
 
-        if (( index == MENU_SELECTED ))
-        then
-            color_selected \
-                "> ${MAIN_MENU_ITEMS[index]}"
-        else
-            printf \
-                '  %s' \
-                "${MAIN_MENU_ITEMS[index]}"
-        fi
-    done
-
-    statusbar_draw \
-        "↑↓ Navigate   Enter Select   Esc Exit"
-
-    screen_refresh
+    tui_print \
+        "Select an operation"
 }
 
 #============================================================
-# Execute selected module
+# Installation modules
 #============================================================
 
-menu_main_execute()
+menu_main_partition()
 {
-    local selected="${MENU_SELECTED}"
+    menu_main_load_module \
+        "partition.sh" || \
+        return 1
 
-    case "$selected"
-    in
-        0)
-            welcome
-            ;;
+    if ! declare -F partition_main >/dev/null 2>&1
+    then
+        logger_error \
+            "partition.sh does not provide partition_main()"
 
-        1)
-            keyboard
-            ;;
+        return 1
+    fi
 
-        2)
-            locale
-            ;;
+    partition_main
+}
 
-        3)
-            network
-            ;;
+menu_main_filesystem()
+{
+    menu_main_load_module \
+        "filesystem.sh" || \
+        return 1
 
-        4)
-            mirrors
-            ;;
+    if ! declare -F filesystem_main >/dev/null 2>&1
+    then
+        logger_error \
+            "filesystem.sh does not provide filesystem_main()"
 
-        5)
-            disks
-            ;;
+        return 1
+    fi
 
-        6)
-            partition
-            ;;
+    filesystem_main
+}
 
-        7)
-            filesystem
-            ;;
+menu_main_mount()
+{
+    menu_main_load_module \
+        "mount.sh" || \
+        return 1
 
-        8)
-            mount
-            ;;
+    if ! declare -F mount_main >/dev/null 2>&1
+    then
+        logger_error \
+            "mount.sh does not provide mount_main()"
 
-        9)
-            packages
-            ;;
+        return 1
+    fi
 
-        10)
-            users
-            ;;
+    mount_main
+}
 
-        11)
-            desktop
-            ;;
+menu_main_packages()
+{
+    menu_main_load_module \
+        "packages.sh" || \
+        return 1
 
-        12)
-            services
-            ;;
+    if ! declare -F packages_main >/dev/null 2>&1
+    then
+        logger_error \
+            "packages.sh does not provide packages_main()"
 
-        13)
-            bootloader
-            ;;
+        return 1
+    fi
 
-        14)
-            summary
-            ;;
+    packages_main
+}
 
-        15)
-            menu_main_install
-            ;;
+menu_main_bootloader()
+{
+    menu_main_load_module \
+        "bootloader.sh" || \
+        return 1
 
-        16)
-            return 1
-            ;;
+    if ! declare -F bootloader_main >/dev/null 2>&1
+    then
+        logger_error \
+            "bootloader.sh does not provide bootloader_main()"
 
-        *)
-            logger_error \
-                "Unknown main menu index: ${selected}"
+        return 1
+    fi
 
-            return 1
-            ;;
-    esac
-
-    return 0
+    bootloader_main
 }
 
 #============================================================
-# Installation pipeline
+# Full installation
 #============================================================
 
 menu_main_install()
 {
     logger_info \
-        "Installation pipeline started"
+        "Full installation selected"
 
     #
-    # Validate configuration before destructive/install phase.
+    # Partition
     #
-
-    if ! config_validate
+    if ! menu_main_partition
     then
-        dialog_error \
-            "Configuration is incomplete or invalid"
+        logger_warn \
+            "Partition stage cancelled or failed"
 
         return 1
     fi
 
     #
-    # Target disk must be selected.
+    # Filesystem
     #
-
-    if [[ -z "$(config_get TARGET_DISK)" ]]
+    if ! menu_main_filesystem
     then
-        dialog_error \
-            "Target disk is not selected"
+        logger_warn \
+            "Filesystem stage cancelled or failed"
 
         return 1
     fi
 
     #
-    # Installation confirmation.
+    # Mount
     #
+    if ! menu_main_mount
+    then
+        logger_warn \
+            "Mount stage cancelled or failed"
 
-    if ! dialog_confirm \
-        "Start installation?
+        return 1
+    fi
 
-All selected data on the target disk
-may be destroyed.
+    #
+    # Packages
+    #
+    if ! menu_main_packages
+    then
+        logger_warn \
+            "Package stage cancelled or failed"
 
-Continue?"
+        return 1
+    fi
+
+    #
+    # Bootloader
+    #
+    if ! menu_main_bootloader
+    then
+        logger_warn \
+            "Bootloader stage cancelled or failed"
+
+        return 1
+    fi
+
+    logger_info \
+        "Full installation completed"
+
+    dialog_info \
+        "Installation complete" \
+        "Arch Linux installation completed successfully."
+
+    return 0
+}
+
+#============================================================
+# System information
+#============================================================
+
+menu_main_system_info()
+{
+    local kernel
+    local arch
+    local memory
+    local cpu
+
+    kernel="$(uname -r)"
+    arch="$(uname -m)"
+
+    memory="$(
+        awk '/MemTotal:/ {
+            printf "%.0f MiB", $2 / 1024
+        }' /proc/meminfo
+    )"
+
+    cpu="$(
+        awk -F: '/model name/ {
+            print $2
+            exit
+        }' /proc/cpuinfo |
+        sed 's/^ *//'
+    )"
+
+    tui_clear
+
+    draw_panel \
+        "System Information" \
+        4 \
+        5 \
+        12 \
+        "$((TUI_COLS - 10))"
+
+    tui_move 6 8
+    tui_print "Kernel:  $kernel"
+
+    tui_move 7 8
+    tui_print "Arch:    $arch"
+
+    tui_move 8 8
+    tui_print "Memory:  $memory"
+
+    tui_move 9 8
+    tui_print "CPU:     $cpu"
+
+    tui_move 14 8
+    tui_print "Enter = Back"
+
+    while true
+    do
+        event_read
+
+        case "$TUI_EVENT"
+        in
+            "$EVENT_SELECT"|"$EVENT_BACK")
+                return 0
+                ;;
+        esac
+    done
+}
+
+#============================================================
+# Shell
+#============================================================
+
+menu_main_shell()
+{
+    tui_restore
+
+    printf '\n'
+    printf 'Arch Installer shell\n'
+    printf 'Type "exit" to return to the installer.\n\n'
+
+    /bin/bash
+
+    printf '\nReturning to Arch Installer...\n'
+
+    sleep 1
+
+    tui_start || \
+        return 1
+
+    return 0
+}
+
+#============================================================
+# Exit confirmation
+#============================================================
+
+menu_main_exit()
+{
+    if dialog_confirm \
+        "Exit Arch Installer?"
     then
         logger_info \
-            "Installation cancelled by user"
+            "User selected exit"
 
         return 0
     fi
 
-    #--------------------------------------------------------
-    # Disk
-    #--------------------------------------------------------
-
-    if ! partition
-    then
-        dialog_error \
-            "Partitioning failed"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Filesystem
-    #--------------------------------------------------------
-
-    if ! filesystem
-    then
-        dialog_error \
-            "Filesystem setup failed"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Mount
-    #--------------------------------------------------------
-
-    if ! mount
-    then
-        dialog_error \
-            "Mounting failed"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Packages
-    #--------------------------------------------------------
-
-    if ! packages
-    then
-        dialog_error \
-            "Package installation failed"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Users
-    #--------------------------------------------------------
-
-    if ! users
-    then
-        dialog_error \
-            "User configuration failed"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Desktop
-    #--------------------------------------------------------
-
-    if ! desktop
-    then
-        dialog_error \
-            "Desktop configuration failed"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Services
-    #--------------------------------------------------------
-
-    if ! services
-    then
-        dialog_error \
-            "Service configuration failed"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Bootloader
-    #--------------------------------------------------------
-
-    if ! bootloader
-    then
-        dialog_error \
-            "Bootloader installation failed"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Summary
-    #--------------------------------------------------------
-
-    summary || true
-
-    logger_info \
-        "Installation pipeline completed"
-
-    dialog_message \
-        "Installation complete" \
-        "Arch Linux installation finished successfully."
-
-    return 0
-}
-
-#============================================================
-# Move selection up
-#============================================================
-
-menu_main_up()
-{
-    if (( MENU_SELECTED > 0 ))
-    then
-        MENU_SELECTED=$((MENU_SELECTED - 1))
-    else
-        MENU_SELECTED=$(( ${#MAIN_MENU_ITEMS[@]} - 1 ))
-    fi
-
-    return 0
-}
-
-#============================================================
-# Move selection down
-#============================================================
-
-menu_main_down()
-{
-    if (( MENU_SELECTED < ${#MAIN_MENU_ITEMS[@]} - 1 ))
-    then
-        MENU_SELECTED=$((MENU_SELECTED + 1))
-    else
-        MENU_SELECTED=0
-    fi
-
-    return 0
+    return 1
 }
 
 #============================================================
@@ -492,59 +369,183 @@ menu_main_down()
 
 menu_main()
 {
-    local event
+    local selected=0
+    local result
+    local items=(
+        "Full installation"
+        "Partition disk"
+        "Create filesystem"
+        "Mount filesystems"
+        "Install packages"
+        "Install bootloader"
+        "System information"
+        "Open shell"
+        "Exit"
+    )
 
     logger_info \
         "Main menu started"
 
-    menu_main_init
-
     while true
     do
-        menu_main_draw || \
+        menu_main_header
+
+        #
+        # Menu box
+        #
+        draw_box \
+            6 \
+            5 \
+            "$((TUI_COLS - 10))" \
+            "$(( ${#items[@]} + 4 ))" || \
             return 1
 
-        event="$(
-            event_read
-        )"
+        local i
 
-        case "$event"
+        for i in "${!items[@]}"
+        do
+            tui_move \
+                "$((8 + i))" \
+                8
+
+            if (( i == selected ))
+            then
+                color_selected \
+                    "> ${items[i]}"
+            else
+                tui_print \
+                    "  ${items[i]}"
+            fi
+        done
+
+        statusbar_draw \
+            '↑↓ Navigate   Home/End   Enter Select   Esc Exit'
+
+        event_read
+
+        case "$TUI_EVENT"
         in
             "$EVENT_UP")
-                menu_main_up
+                if (( selected > 0 ))
+                then
+                    selected=$((selected - 1))
+                else
+                    selected=$((${#items[@]} - 1))
+                fi
                 ;;
 
             "$EVENT_DOWN")
-                menu_main_down
+                if (( selected < ${#items[@]} - 1 ))
+                then
+                    selected=$((selected + 1))
+                else
+                    selected=0
+                fi
+                ;;
+
+            "$EVENT_HOME")
+                selected=0
+                ;;
+
+            "$EVENT_END")
+                selected=$((${#items[@]} - 1))
                 ;;
 
             "$EVENT_SELECT")
-                if ! menu_main_execute
-                then
-                    logger_info \
-                        "Main menu exit requested"
+                result="$selected"
 
-                    break
-                fi
+                case "$result"
+                in
+                    0)
+                        if ! menu_main_install
+                        then
+                            dialog_warning \
+                                "Installation" \
+                                "Installation was cancelled or failed."
+                        fi
+                        ;;
+
+                    1)
+                        if ! menu_main_partition
+                        then
+                            dialog_warning \
+                                "Partition" \
+                                "Partitioning was cancelled or failed."
+                        fi
+                        ;;
+
+                    2)
+                        if ! menu_main_filesystem
+                        then
+                            dialog_warning \
+                                "Filesystem" \
+                                "Filesystem stage was cancelled or failed."
+                        fi
+                        ;;
+
+                    3)
+                        if ! menu_main_mount
+                        then
+                            dialog_warning \
+                                "Mount" \
+                                "Mount stage was cancelled or failed."
+                        fi
+                        ;;
+
+                    4)
+                        if ! menu_main_packages
+                        then
+                            dialog_warning \
+                                "Packages" \
+                                "Package installation was cancelled or failed."
+                        fi
+                        ;;
+
+                    5)
+                        if ! menu_main_bootloader
+                        then
+                            dialog_warning \
+                                "Bootloader" \
+                                "Bootloader installation was cancelled or failed."
+                        fi
+                        ;;
+
+                    6)
+                        menu_main_system_info
+                        ;;
+
+                    7)
+                        if ! menu_main_shell
+                        then
+                            dialog_error \
+                                "Failed to return to TUI"
+                        fi
+                        ;;
+
+                    8)
+                        if menu_main_exit
+                        then
+                            logger_info \
+                                "Main menu exited"
+
+                            return 0
+                        fi
+                        ;;
+
+                esac
                 ;;
 
             "$EVENT_BACK")
-                if dialog_confirm \
-                    "Exit Arch Installer?"
+                if menu_main_exit
                 then
-                    break
-                fi
-                ;;
+                    logger_info \
+                        "Main menu exited"
 
-            *)
+                    return 0
+                fi
                 ;;
         esac
     done
-
-    logger_info \
-        "Main menu stopped"
-
-    return 0
 }
 
 #============================================================

@@ -5,7 +5,7 @@
 #------------------------------------------------------------
 # lib/tui.sh
 #
-# Единственный низкоуровневый TTY/TUI-модуль.
+# Низкоуровневый TTY/TUI-модуль.
 #
 # Ответственность:
 #   • /dev/tty
@@ -30,12 +30,10 @@
 #   • filesystem logic
 #   • package logic
 #
-# Требования:
-#   • Bash 4+
-#   • /dev/tty
-#   • stty
-#   • tput
-#
+#============================================================
+
+#============================================================
+# Include guard
 #============================================================
 
 if [[ -n "${TUI_SH_LOADED:-}" ]]
@@ -47,6 +45,10 @@ readonly TUI_SH_LOADED=1
 
 #============================================================
 # Event constants
+#
+# ВАЖНО:
+# Эти константы должны быть объявлены ДО переменных,
+# которые используют их при set -u.
 #============================================================
 
 readonly EVENT_NONE="NONE"
@@ -87,16 +89,7 @@ readonly EVENT_F12="F12"
 readonly EVENT_HELP="HELP"
 readonly EVENT_CHAR="CHAR"
 
-#
-# Timeout used while reading an escape sequence.
-#
-# 0.15 sec is safer than 0.08 sec for:
-#   • virtual consoles
-#   • VMs
-#   • slow terminals
-#   • remote consoles
-#
-readonly TUI_ESCAPE_TIMEOUT="0.15"
+readonly TUI_ESCAPE_TIMEOUT="0.08"
 
 #============================================================
 # Terminal
@@ -104,9 +97,6 @@ readonly TUI_ESCAPE_TIMEOUT="0.15"
 
 TUI_TTY="${TUI_TTY:-/dev/tty}"
 
-#
-# File descriptor opened by tui_open_terminal().
-#
 TUI_FD=-1
 
 #============================================================
@@ -138,6 +128,9 @@ TUI_INPUT_RESULT=""
 
 TUI_MENU_RESULT=""
 TUI_MENU_VALUE=""
+
+TUI_MENU_FIRST=0
+TUI_MENU_VISIBLE=0
 
 TUI_PROGRESS_ACTIVE=0
 TUI_PROGRESS_PERCENT=0
@@ -192,17 +185,11 @@ tui_log_info()
 
 tui_open_terminal()
 {
-    #
-    # Already open.
-    #
     if (( TUI_FD >= 0 ))
     then
         return 0
     fi
 
-    #
-    # /dev/tty must exist.
-    #
     if [[ ! -e "$TUI_TTY" ]]
     then
         tui_log_error \
@@ -211,13 +198,18 @@ tui_open_terminal()
         return 1
     fi
 
+    if [[ ! -r "$TUI_TTY" || ! -w "$TUI_TTY" ]]
+    then
+        tui_log_error \
+            "TUI: terminal is not readable/writable: $TUI_TTY"
+
+        return 1
+    fi
+
     #
-    # Open terminal read/write.
+    # Bash dynamic FD.
     #
-    #
-    # Bash supports dynamic file descriptors:
-    #
-    #   exec {fd}<>/dev/tty
+    # Не используем eval.
     #
     if ! exec {TUI_FD}<>"$TUI_TTY"
     then
@@ -230,7 +222,7 @@ tui_open_terminal()
     fi
 
     #
-    # Verify that the descriptor really behaves as a tty.
+    # Verify descriptor really points to a tty.
     #
     if ! tty <&"$TUI_FD" >/dev/null 2>&1
     then
@@ -247,6 +239,10 @@ tui_open_terminal()
     return 0
 }
 
+#============================================================
+# Close terminal
+#============================================================
+
 tui_close_terminal()
 {
     if (( TUI_FD >= 0 ))
@@ -254,9 +250,11 @@ tui_close_terminal()
         exec {TUI_FD}>&- 2>/dev/null || true
         TUI_FD=-1
     fi
-
-    return 0
 }
+
+#============================================================
+# Require terminal
+#============================================================
 
 tui_require_tty()
 {
@@ -282,7 +280,7 @@ tui_print()
     if (( TUI_FD < 0 ))
     then
         tui_log_error \
-            "TUI: output attempted with invalid terminal FD"
+            "TUI: terminal FD is not open"
 
         return 1
     fi
@@ -292,29 +290,15 @@ tui_print()
 
 tui_printf()
 {
-    local format="${1-}"
-
-    shift || true
-
     if (( TUI_FD < 0 ))
     then
         tui_log_error \
-            "TUI: formatted output attempted with invalid terminal FD"
+            "TUI: terminal FD is not open"
 
         return 1
     fi
 
-    printf "$format" "$@" >&"$TUI_FD"
-}
-
-tui_flush()
-{
-    #
-    # Bash printf writes directly to the descriptor.
-    #
-    # This function intentionally remains an API no-op.
-    #
-    return 0
+    printf "$@" >&"$TUI_FD"
 }
 
 #============================================================
@@ -331,7 +315,7 @@ tui_save_terminal()
     tui_require_tty || return 1
 
     if ! TUI_STTY_STATE="$(
-        stty -g <&"$TUI_FD" 2>/dev/null
+        stty -g <&"$TUI_FD"
     )"
     then
         tui_log_error \
@@ -362,16 +346,11 @@ tui_save_terminal()
 
 tui_restore_terminal()
 {
-    local rc=0
-
     if (( ! TUI_STTY_SAVED ))
     then
         return 0
     fi
 
-    #
-    # Reopen terminal if necessary.
-    #
     if (( TUI_FD < 0 ))
     then
         if ! tui_open_terminal
@@ -384,7 +363,7 @@ tui_restore_terminal()
     fi
 
     #
-    # First attempt: exact original state.
+    # First try exact original state.
     #
     if stty "$TUI_STTY_STATE" <&"$TUI_FD" 2>/dev/null
     then
@@ -404,14 +383,14 @@ tui_restore_terminal()
     then
         tui_log_warn \
             "TUI: terminal restored using stty sane"
-    else
-        tui_log_error \
-            "TUI: failed to restore terminal using stty sane"
 
-        rc=1
+        return 0
     fi
 
-    return "$rc"
+    tui_log_error \
+        "TUI: failed to restore terminal using stty sane"
+
+    return 1
 }
 
 #============================================================
@@ -423,34 +402,22 @@ tui_detect_capabilities()
     TUI_COLOR_ENABLED=1
     TUI_UNICODE_ENABLED=1
 
-    #
-    # NO_COLOR convention.
-    #
     if [[ -n "${NO_COLOR:-}" ]]
     then
         TUI_COLOR_ENABLED=0
     fi
 
-    #
-    # Dumb terminal.
-    #
     if [[ "${TERM:-}" == "dumb" ]]
     then
         TUI_COLOR_ENABLED=0
         TUI_UNICODE_ENABLED=0
     fi
 
-    #
-    # Verify color support.
-    #
     if ! tput colors <&"$TUI_FD" >/dev/null 2>&1
     then
         TUI_COLOR_ENABLED=0
     fi
 
-    #
-    # C / POSIX locales do not guarantee UTF-8.
-    #
     case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
     in
         C|POSIX|C.*|POSIX.*)
@@ -472,7 +439,7 @@ tui_update_size()
     tui_require_tty || return 1
 
     #
-    # Preferred method.
+    # Prefer tput.
     #
     rows="$(
         tput lines <&"$TUI_FD" 2>/dev/null || true
@@ -483,7 +450,7 @@ tui_update_size()
     )"
 
     #
-    # Validate.
+    # Validate tput result.
     #
     if [[ ! "$rows" =~ ^[0-9]+$ ]]
     then
@@ -496,7 +463,7 @@ tui_update_size()
     fi
 
     #
-    # Fallback.
+    # Fallback to stty.
     #
     if [[ -z "$rows" || -z "$cols" ]]
     then
@@ -556,14 +523,8 @@ tui_init()
 
     tui_require_tty || return 1
 
-    #
-    # Save original terminal state BEFORE modifying it.
-    #
     tui_save_terminal || return 1
 
-    #
-    # Get initial screen size.
-    #
     if ! tui_update_size
     then
         tui_restore_terminal || true
@@ -591,6 +552,32 @@ tui_init()
 }
 
 #============================================================
+# Configure raw-ish input
+#============================================================
+
+tui_enable_input()
+{
+    tui_require_tty || return 1
+
+    if ! stty \
+        -echo \
+        -echonl \
+        -icanon \
+        -ixon \
+        min 1 \
+        time 0 \
+        <&"$TUI_FD"
+    then
+        tui_log_error \
+            "TUI: failed to configure terminal input"
+
+        return 1
+    fi
+
+    return 0
+}
+
+#============================================================
 # Activate TUI
 #============================================================
 
@@ -606,26 +593,20 @@ tui_start()
         tui_init || return 1
     fi
 
-    #
-    # Refresh terminal dimensions.
-    #
-    tui_update_size || return 1
+    if ! tui_update_size
+    then
+        return 1
+    fi
 
-    #
-    # Protect arithmetic expressions.
-    #
-    if ! [[ "$TUI_ROWS" =~ ^[0-9]+$ &&
-            "$TUI_COLS" =~ ^[0-9]+$ ]]
+    if [[ ! "$TUI_ROWS" =~ ^[0-9]+$ ||
+          ! "$TUI_COLS" =~ ^[0-9]+$ ]]
     then
         tui_log_error \
-            "TUI: invalid size variables"
+            "TUI: invalid terminal size"
 
         return 1
     fi
 
-    #
-    # Minimum usable size.
-    #
     if (( TUI_ROWS < 20 || TUI_COLS < 70 ))
     then
         tui_log_error \
@@ -635,20 +616,27 @@ tui_start()
     fi
 
     #
+    # Configure input BEFORE entering alternate screen.
+    #
+    if ! tui_enable_input
+    then
+        tui_restore_terminal || true
+        return 1
+    fi
+
+    #
     # Enter alternate screen.
     #
     if ! tui_print $'\033[?1049h'
     then
-        tui_log_error \
-            "TUI: failed to enter alternate screen"
-
+        tui_restore_terminal || true
         return 1
     fi
 
     TUI_ALT_SCREEN=1
 
     #
-    # Clear alternate screen.
+    # Clear screen.
     #
     if ! tui_print $'\033[2J\033[H'
     then
@@ -668,26 +656,11 @@ tui_start()
     TUI_CURSOR_HIDDEN=1
 
     #
-    # Configure keyboard input.
+    # Reset attributes.
     #
-    #
-    # Keep signals enabled but disable canonical input,
-    # echo and XON/XOFF.
-    #
-    if ! stty \
-        -echo \
-        -echonl \
-        -icanon \
-        -ixon \
-        min 1 \
-        time 0 \
-        <&"$TUI_FD"
+    if ! tui_print $'\033[0m'
     then
-        tui_log_error \
-            "TUI: failed to configure terminal input"
-
         tui_abort_start
-
         return 1
     fi
 
@@ -709,7 +682,7 @@ tui_start()
 tui_abort_start()
 {
     #
-    # Show cursor before leaving screen.
+    # Restore visual terminal state first.
     #
     if (( TUI_CURSOR_HIDDEN ))
     then
@@ -717,17 +690,15 @@ tui_abort_start()
         TUI_CURSOR_HIDDEN=0
     fi
 
-    #
-    # Leave alternate screen.
-    #
     if (( TUI_ALT_SCREEN ))
     then
+        tui_print $'\033[0m' 2>/dev/null || true
         tui_print $'\033[?1049l' 2>/dev/null || true
         TUI_ALT_SCREEN=0
     fi
 
     #
-    # Restore original terminal mode.
+    # Restore stty AFTER terminal escape sequences.
     #
     if (( TUI_STTY_SAVED ))
     then
@@ -748,16 +719,19 @@ tui_restore()
     local failed=0
 
     #
-    # Make sure terminal descriptor exists if possible.
+    # Nothing to restore.
     #
-    if (( TUI_FD < 0 )) &&
-       (( TUI_STTY_SAVED || TUI_ALT_SCREEN || TUI_CURSOR_HIDDEN ))
+    if (( ! TUI_INITIALIZED &&
+          ! TUI_ACTIVE &&
+          ! TUI_ALT_SCREEN &&
+          ! TUI_CURSOR_HIDDEN &&
+          ! TUI_STTY_SAVED ))
     then
-        tui_open_terminal || true
+        return 0
     fi
 
     #
-    # Show cursor.
+    # Restore visual terminal state FIRST.
     #
     if (( TUI_CURSOR_HIDDEN ))
     then
@@ -770,7 +744,7 @@ tui_restore()
     fi
 
     #
-    # Reset attributes.
+    # Reset terminal attributes.
     #
     tui_print $'\033[0m' 2>/dev/null || true
 
@@ -799,7 +773,7 @@ tui_restore()
     fi
 
     #
-    # Reset internal state.
+    # Reset state.
     #
     TUI_ACTIVE=0
     TUI_INITIALIZED=0
@@ -817,6 +791,8 @@ tui_restore()
 
     TUI_MENU_RESULT=""
     TUI_MENU_VALUE=""
+    TUI_MENU_FIRST=0
+    TUI_MENU_VISIBLE=0
 
     TUI_PROGRESS_ACTIVE=0
     TUI_PROGRESS_PERCENT=0
@@ -845,16 +821,7 @@ tui_restore()
 
 tui_shutdown()
 {
-    local rc=0
-
-    if ! tui_restore
-    then
-        rc=1
-    fi
-
-    tui_close_terminal
-
-    return "$rc"
+    tui_restore
 }
 
 #============================================================
@@ -866,8 +833,8 @@ tui_move()
     local row="${1:-}"
     local col="${2:-}"
 
-    if ! [[ "$row" =~ ^[0-9]+$ &&
-            "$col" =~ ^[0-9]+$ ]]
+    if [[ ! "$row" =~ ^[0-9]+$ ||
+          ! "$col" =~ ^[0-9]+$ ]]
     then
         tui_log_error \
             "TUI: invalid cursor position: ${row},${col}"
@@ -880,16 +847,13 @@ tui_move()
         return 1
     fi
 
-    #
-    # Coordinates beyond the current screen are allowed by the
-    # low-level cursor primitive. Drawing functions are responsible
-    # for their own geometry.
-    #
-
-    tui_printf \
+    if ! tui_printf \
         '\033[%d;%dH' \
         "$row" \
-        "$col" || return 1
+        "$col"
+    then
+        return 1
+    fi
 
     TUI_CURSOR_ROW="$row"
     TUI_CURSOR_COL="$col"
@@ -1086,7 +1050,10 @@ tui_arrow_right()
 
 tui_clear()
 {
-    tui_print $'\033[2J\033[H' || return 1
+    if ! tui_print $'\033[2J\033[H'
+    then
+        return 1
+    fi
 
     TUI_CURSOR_ROW=1
     TUI_CURSOR_COL=1
@@ -1102,12 +1069,15 @@ screen_clear()
 screen_prepare()
 {
     tui_update_size || return 1
-    tui_clear || return 1
-
-    return 0
+    tui_clear
 }
 
 screen_refresh()
+{
+    return 0
+}
+
+tui_flush()
 {
     return 0
 }
@@ -1132,11 +1102,8 @@ tui_repeat()
     local count="${2:-0}"
     local i
 
-    if ! [[ "$count" =~ ^[0-9]+$ ]]
+    if [[ ! "$count" =~ ^[0-9]+$ ]]
     then
-        tui_log_error \
-            "TUI: invalid repeat count: $count"
-
         return 1
     fi
 
@@ -1164,73 +1131,68 @@ draw_box()
     local width="${3:-10}"
     local height="${4:-3}"
     local y
+    local horizontal
 
     if ! [[ "$row" =~ ^[0-9]+$ &&
             "$col" =~ ^[0-9]+$ &&
             "$width" =~ ^[0-9]+$ &&
             "$height" =~ ^[0-9]+$ ]]
     then
-        tui_log_error \
-            "TUI: invalid box geometry"
-
         return 1
     fi
 
-    if (( row < 1 ||
-          col < 1 ||
-          width < 2 ||
-          height < 2 ))
+    if (( width < 2 || height < 2 ))
     then
         return 1
     fi
 
-    #
-    # Horizontal character.
-    #
-    local horizontal='-'
+    if (( TUI_COLS > 0 &&
+          col + width - 1 > TUI_COLS ))
+    then
+        return 1
+    fi
+
+    if (( TUI_ROWS > 0 &&
+          row + height - 1 > TUI_ROWS ))
+    then
+        return 1
+    fi
 
     if (( TUI_UNICODE_ENABLED ))
     then
         horizontal='─'
+    else
+        horizontal='-'
     fi
 
-    #
-    # Top.
-    #
     tui_move "$row" "$col" || return 1
 
-    tui_top_left
-    tui_repeat "$horizontal" "$((width - 2))"
-    tui_top_right
+    tui_top_left || return 1
+    tui_repeat "$horizontal" "$((width - 2))" || return 1
+    tui_top_right || return 1
 
-    #
-    # Sides.
-    #
     for (( y=1; y<height-1; y++ ))
     do
         tui_move \
             "$((row + y))" \
             "$col" || return 1
 
-        tui_vertical
+        tui_vertical || return 1
 
         tui_move \
             "$((row + y))" \
             "$((col + width - 1))" || return 1
 
-        tui_vertical
+        tui_vertical || return 1
     done
 
-    #
-    # Bottom.
-    #
     tui_move \
         "$((row + height - 1))" \
         "$col" || return 1
 
-    tui_bottom_left
-    tui_repeat "$horizontal" "$((width - 2))"
-    tui_bottom_right
+    tui_bottom_left || return 1
+    tui_repeat "$horizontal" "$((width - 2))" || return 1
+    tui_bottom_right || return 1
 
     return 0
 }
@@ -1270,11 +1232,6 @@ titlebar_draw()
 {
     local title="${1:-Arch Installer}"
 
-    if (( TUI_COLS < 1 ))
-    then
-        return 1
-    fi
-
     tui_move 1 1 || return 1
 
     tui_repeat ' ' "$TUI_COLS" || return 1
@@ -1287,11 +1244,6 @@ titlebar_draw()
 statusbar_draw()
 {
     local text="${1-}"
-
-    if (( TUI_ROWS < 1 || TUI_COLS < 1 ))
-    then
-        return 1
-    fi
 
     tui_move \
         "$TUI_ROWS" \
@@ -1324,7 +1276,6 @@ event_read_csi()
 {
     local seq="["
     local byte=""
-    local length
 
     while true
     do
@@ -1340,20 +1291,14 @@ event_read_csi()
 
         seq+="$byte"
 
-        length="${#seq}"
+        case "$byte"
+        in
+            A|B|C|D|H|F|Z|~)
+                break
+                ;;
+        esac
 
-        #
-        # CSI final byte is in the range 0x40..0x7E.
-        #
-        if [[ "$byte" =~ [@-~] ]]
-        then
-            break
-        fi
-
-        #
-        # Protect against malformed sequences.
-        #
-        if (( length >= 32 ))
+        if (( ${#seq} >= 32 ))
         then
             TUI_EVENT="$EVENT_NONE"
             return 0
@@ -1362,47 +1307,22 @@ event_read_csi()
 
     case "$seq"
     in
-        #
-        # Arrow keys.
-        #
-        "[A"|"[1A"|"[1;1A")
+        "[A")
             TUI_EVENT="$EVENT_UP"
             ;;
 
-        "[B"|"[1B"|"[1;1B")
+        "[B")
             TUI_EVENT="$EVENT_DOWN"
             ;;
 
-        "[C"|"[1C"|"[1;1C")
+        "[C")
             TUI_EVENT="$EVENT_RIGHT"
             ;;
 
-        "[D"|"[1D"|"[1;1D")
+        "[D")
             TUI_EVENT="$EVENT_LEFT"
             ;;
 
-        #
-        # Modified arrows.
-        #
-        "[1;2A"|"[1;3A"|"[1;4A"|"[1;5A"|"[1;6A"|"[1;7A"|"[1;8A")
-            TUI_EVENT="$EVENT_UP"
-            ;;
-
-        "[1;2B"|"[1;3B"|"[1;4B"|"[1;5B"|"[1;6B"|"[1;7B"|"[1;8B")
-            TUI_EVENT="$EVENT_DOWN"
-            ;;
-
-        "[1;2C"|"[1;3C"|"[1;4C"|"[1;5C"|"[1;6C"|"[1;7C"|"[1;8C")
-            TUI_EVENT="$EVENT_RIGHT"
-            ;;
-
-        "[1;2D"|"[1;3D"|"[1;4D"|"[1;5D"|"[1;6D"|"[1;7D"|"[1;8D")
-            TUI_EVENT="$EVENT_LEFT"
-            ;;
-
-        #
-        # Home / End.
-        #
         "[H"|"[1~"|"[7~")
             TUI_EVENT="$EVENT_HOME"
             ;;
@@ -1411,9 +1331,6 @@ event_read_csi()
             TUI_EVENT="$EVENT_END"
             ;;
 
-        #
-        # Delete / Page.
-        #
         "[3~")
             TUI_EVENT="$EVENT_DELETE"
             ;;
@@ -1426,16 +1343,10 @@ event_read_csi()
             TUI_EVENT="$EVENT_PAGE_DOWN"
             ;;
 
-        #
-        # Shift+Tab.
-        #
         "[Z")
             TUI_EVENT="$EVENT_TAB_BACK"
             ;;
 
-        #
-        # Function keys.
-        #
         "[11~")
             TUI_EVENT="$EVENT_F1"
             ;;
@@ -1484,6 +1395,22 @@ event_read_csi()
             TUI_EVENT="$EVENT_F12"
             ;;
 
+        "[1;2A"|"[1;3A"|"[1;4A"|"[1;5A")
+            TUI_EVENT="$EVENT_UP"
+            ;;
+
+        "[1;2B"|"[1;3B"|"[1;4B"|"[1;5B")
+            TUI_EVENT="$EVENT_DOWN"
+            ;;
+
+        "[1;2C"|"[1;3C"|"[1;4C"|"[1;5C")
+            TUI_EVENT="$EVENT_RIGHT"
+            ;;
+
+        "[1;2D"|"[1;3D"|"[1;4D"|"[1;5D")
+            TUI_EVENT="$EVENT_LEFT"
+            ;;
+
         *)
             TUI_EVENT="$EVENT_NONE"
             ;;
@@ -1504,38 +1431,20 @@ event_read()
     TUI_EVENT="$EVENT_NONE"
     TUI_EVENT_CHAR=""
 
-    if (( TUI_FD < 0 ))
-    then
-        tui_log_error \
-            "TUI: event_read called without terminal FD"
+    tui_require_tty || return 1
 
-        return 1
-    fi
-
-    #
-    # Read one byte.
-    #
     if ! IFS= read \
         -rsn1 \
         key \
         <&"$TUI_FD"
     then
-        #
-        # EOF / closed terminal.
-        #
         TUI_EVENT="$EVENT_BACK"
         return 0
     fi
 
     case "$key"
     in
-        #
-        # Escape sequence.
-        #
         $'\e')
-            #
-            # A standalone ESC is BACK.
-            #
             if ! IFS= read \
                 -rsn1 \
                 -t "$TUI_ESCAPE_TIMEOUT" \
@@ -1548,16 +1457,10 @@ event_read()
 
             case "$key"
             in
-                #
-                # CSI sequence.
-                #
                 "[")
                     event_read_csi
                     ;;
 
-                #
-                # SS3 sequence.
-                #
                 "O")
                     if IFS= read \
                         -rsn1 \
@@ -1567,95 +1470,45 @@ event_read()
                     then
                         case "$ss3"
                         in
-                            A)
-                                TUI_EVENT="$EVENT_UP"
-                                ;;
-
-                            B)
-                                TUI_EVENT="$EVENT_DOWN"
-                                ;;
-
-                            C)
-                                TUI_EVENT="$EVENT_RIGHT"
-                                ;;
-
-                            D)
-                                TUI_EVENT="$EVENT_LEFT"
-                                ;;
-
-                            H)
-                                TUI_EVENT="$EVENT_HOME"
-                                ;;
-
-                            F)
-                                TUI_EVENT="$EVENT_END"
-                                ;;
-
-                            P)
-                                TUI_EVENT="$EVENT_F1"
-                                ;;
-
-                            Q)
-                                TUI_EVENT="$EVENT_F2"
-                                ;;
-
-                            R)
-                                TUI_EVENT="$EVENT_F3"
-                                ;;
-
-                            S)
-                                TUI_EVENT="$EVENT_F4"
-                                ;;
-
-                            *)
-                                TUI_EVENT="$EVENT_NONE"
-                                ;;
+                            A) TUI_EVENT="$EVENT_UP" ;;
+                            B) TUI_EVENT="$EVENT_DOWN" ;;
+                            C) TUI_EVENT="$EVENT_RIGHT" ;;
+                            D) TUI_EVENT="$EVENT_LEFT" ;;
+                            H) TUI_EVENT="$EVENT_HOME" ;;
+                            F) TUI_EVENT="$EVENT_END" ;;
+                            P) TUI_EVENT="$EVENT_F1" ;;
+                            Q) TUI_EVENT="$EVENT_F2" ;;
+                            R) TUI_EVENT="$EVENT_F3" ;;
+                            S) TUI_EVENT="$EVENT_F4" ;;
+                            *) TUI_EVENT="$EVENT_NONE" ;;
                         esac
                     else
                         TUI_EVENT="$EVENT_NONE"
                     fi
                     ;;
 
-                #
-                # Alt+character / unknown escape.
-                #
                 *)
                     TUI_EVENT="$EVENT_NONE"
                     ;;
             esac
             ;;
 
-        #
-        # Enter.
-        #
         "")
             TUI_EVENT="$EVENT_SELECT"
             ;;
 
-        #
-        # Space.
-        #
         " ")
             TUI_EVENT="$EVENT_SPACE"
             ;;
 
-        #
-        # Tab.
-        #
         $'\t')
             TUI_EVENT="$EVENT_TAB"
             ;;
 
-        #
-        # Backspace / DEL.
-        #
         $'\177'|$'\b')
             TUI_EVENT="$EVENT_DELETE"
             ;;
 
-        #
-        # Ordinary character.
-        #
         *)
             TUI_EVENT="$EVENT_CHAR"
             TUI_EVENT_CHAR="$key"
@@ -1750,20 +1603,12 @@ tui_input()
         return 1
     fi
 
-    #
-    # Truncate initial value if necessary.
-    #
-    if (( ${#value} > width ))
-    then
-        value="${value:0:width}"
-    fi
-
     while true
     do
         tui_clear || return 1
 
         tui_move 5 5 || return 1
-        tui_print "$prompt"
+        tui_print "$prompt" || return 1
 
         tui_move 7 5 || return 1
 
@@ -1771,15 +1616,15 @@ tui_input()
         then
             masked=""
 
-            if (( ${#value} > 0 ))
+            if [[ -n "$value" ]]
             then
                 printf -v masked '%*s' "${#value}" ''
                 masked="${masked// /*}"
             fi
 
-            tui_print "$masked"
+            tui_print "$masked" || return 1
         else
-            tui_print "$value"
+            tui_print "$value" || return 1
         fi
 
         event_read || return 1
@@ -1840,18 +1685,12 @@ dialog_message()
     local title="${1:-Message}"
     local message="${2-}"
     local box_width
-    local box_height=10
 
-    if (( TUI_COLS < 20 ))
+    if (( TUI_COLS > 16 ))
     then
-        return 1
-    fi
-
-    box_width=$((TUI_COLS - 16))
-
-    if (( box_width < 20 ))
-    then
-        box_width=20
+        box_width=$((TUI_COLS - 16))
+    else
+        box_width=40
     fi
 
     tui_clear || return 1
@@ -1860,7 +1699,7 @@ dialog_message()
         5 \
         8 \
         "$box_width" \
-        "$box_height" || return 1
+        10 || return 1
 
     tui_move 6 10 || return 1
     color_title "$title"
@@ -1914,16 +1753,11 @@ dialog_confirm()
     local message="${1:-Continue?}"
     local box_width
 
-    if (( TUI_COLS < 20 ))
+    if (( TUI_COLS > 16 ))
     then
-        return 1
-    fi
-
-    box_width=$((TUI_COLS - 16))
-
-    if (( box_width < 20 ))
-    then
-        box_width=20
+        box_width=$((TUI_COLS - 16))
+    else
+        box_width=40
     fi
 
     tui_clear || return 1
@@ -1970,29 +1804,24 @@ tui_menu()
 
     local items=("$@")
     local count="${#items[@]}"
-
     local event=""
-    local i=0
-
+    local i
     local box_height
-    local visible_items
-    local top=0
-    local bottom
+    local first
+    local visible
+    local last
+    local row
 
     TUI_MENU_RESULT=""
     TUI_MENU_VALUE=""
+    TUI_MENU_FIRST=0
+    TUI_MENU_VISIBLE=0
 
     if (( count == 0 ))
     then
-        tui_log_error \
-            "TUI: menu contains no items"
-
         return 1
     fi
 
-    #
-    # Validate initial selection.
-    #
     if ! [[ "$selected" =~ ^[0-9]+$ ]]
     then
         selected=0
@@ -2000,7 +1829,18 @@ tui_menu()
 
     if (( selected >= count ))
     then
-        selected=0
+        selected=$((count - 1))
+    fi
+
+    #
+    # Maximum number of menu entries visible between
+    # title and status bar.
+    #
+    visible=$((TUI_ROWS - 8))
+
+    if (( visible < 1 ))
+    then
+        return 1
     fi
 
     while true
@@ -2009,28 +1849,7 @@ tui_menu()
 
         titlebar_draw "$title" || return 1
 
-        #
-        # Reserve:
-        #   3 rows top
-        #   1 row bottom
-        #   menu border
-        #
-        visible_items=$((TUI_ROWS - 7))
-
-        if (( visible_items < 1 ))
-        then
-            tui_log_error \
-                "TUI: terminal too small for menu"
-
-            return 1
-        fi
-
-        if (( visible_items > count ))
-        then
-            visible_items="$count"
-        fi
-
-        box_height=$((visible_items + 4))
+        box_height=$((visible + 4))
 
         if (( box_height > TUI_ROWS - 3 ))
         then
@@ -2045,22 +1864,38 @@ tui_menu()
         #
         # Keep selected item visible.
         #
-        if (( selected < top ))
+        first="$TUI_MENU_FIRST"
+
+        if (( selected < first ))
         then
-            top="$selected"
+            first="$selected"
         fi
 
-        bottom=$((top + visible_items - 1))
-
-        if (( selected > bottom ))
+        if (( selected >= first + visible ))
         then
-            top=$((selected - visible_items + 1))
+            first=$((selected - visible + 1))
         fi
 
-        if (( top < 0 ))
+        if (( first < 0 ))
         then
-            top=0
+            first=0
         fi
+
+        if (( first > count - 1 ))
+        then
+            first=$((count - 1))
+        fi
+
+        TUI_MENU_FIRST="$first"
+
+        last=$((first + visible - 1))
+
+        if (( last >= count ))
+        then
+            last=$((count - 1))
+        fi
+
+        TUI_MENU_VISIBLE=$((last - first + 1))
 
         draw_box \
             3 \
@@ -2068,51 +1903,44 @@ tui_menu()
             "$((TUI_COLS - 10))" \
             "$box_height" || return 1
 
-        #
-        # Draw visible items.
-        #
-        for (( i=0; i<visible_items; i++ ))
+        row=5
+
+        for (( i=first; i<=last; i++ ))
         do
-            local index=$((top + i))
-
-            if (( index >= count ))
-            then
-                break
-            fi
-
             tui_move \
-                "$((5 + i))" \
+                "$row" \
                 8 || return 1
 
-            if (( index == selected ))
+            if (( i == selected ))
             then
                 color_selected \
-                    "> ${items[index]}"
+                    "> ${items[i]}"
             else
                 tui_print \
-                    "  ${items[index]}"
+                    "  ${items[i]}"
             fi
+
+            ((row++))
         done
 
         #
         # Scroll indicators.
         #
-        if (( top > 0 ))
+        if (( first > 0 ))
         then
-            tui_move 4 "$((TUI_COLS - 12))" || return 1
+            tui_move 4 "$((TUI_COLS - 10))" || return 1
             tui_arrow_up
         fi
 
-        if (( top + visible_items < count ))
+        if (( last < count - 1 ))
         then
-            tui_move "$((4 + visible_items))" "$((TUI_COLS - 12))" ||
-                return 1
-
+            tui_move "$((3 + box_height - 1))" "$((TUI_COLS - 10))" || return 1
             tui_arrow_down
         fi
 
         statusbar_draw \
-            '↑↓ Navigate   Enter Select   Esc Back' || return 1
+            '↑↓ Navigate   Home/End   PgUp/PgDn   Enter Select   Esc Back' \
+            || return 1
 
         event_read || return 1
 
@@ -2147,7 +1975,7 @@ tui_menu()
                 ;;
 
             "$EVENT_PAGE_UP")
-                selected=$((selected - visible_items))
+                selected=$((selected - visible))
 
                 if (( selected < 0 ))
                 then
@@ -2156,7 +1984,7 @@ tui_menu()
                 ;;
 
             "$EVENT_PAGE_DOWN")
-                selected=$((selected + visible_items))
+                selected=$((selected + visible))
 
                 if (( selected >= count ))
                 then
@@ -2212,13 +2040,12 @@ tui_progress()
             "$width" =~ ^[0-9]+$ &&
             "$percent" =~ ^[0-9]+$ ]]
     then
-        tui_log_error \
-            "TUI: invalid progress parameters"
-
         return 1
     fi
 
-    if (( row < 1 || col < 1 || width < 1 ))
+    if (( row < 1 ||
+          col < 1 ||
+          width < 1 ))
     then
         return 1
     fi
@@ -2238,9 +2065,7 @@ tui_progress()
     tui_print '[' || return 1
     tui_repeat '#' "$filled" || return 1
     tui_repeat ' ' "$empty" || return 1
-    tui_printf '] %3d%%' "$percent" || return 1
-
-    return 0
+    tui_printf '] %3d%%' "$percent"
 }
 
 progress_start()
@@ -2254,9 +2079,6 @@ progress_start()
             "$col" =~ ^[0-9]+$ &&
             "$width" =~ ^[0-9]+$ ]]
     then
-        tui_log_error \
-            "TUI: invalid progress geometry"
-
         return 1
     fi
 
@@ -2297,9 +2119,6 @@ progress_set()
 
     if ! [[ "$percent" =~ ^[0-9]+$ ]]
     then
-        tui_log_error \
-            "TUI: invalid progress percentage: $percent"
-
         return 1
     fi
 
@@ -2318,8 +2137,6 @@ progress_set()
             "$TUI_PROGRESS_WIDTH" \
             "$TUI_PROGRESS_PERCENT"
     fi
-
-    return 0
 }
 
 progress_complete()

@@ -22,7 +22,8 @@
 #   • package logic
 #   • bootloader logic
 #   • CONFIG business logic
-#   • drawing / keyboard logic
+#   • drawing logic
+#   • keyboard parsing
 #
 #============================================================
 
@@ -38,7 +39,6 @@ INSTALLER_ROOT=""
 INSTALLER_LIB=""
 INSTALLER_MODULES=""
 
-INSTALLER_STARTED=0
 INSTALLER_EXITING=0
 
 #============================================================
@@ -51,9 +51,12 @@ get_script_dir()
 
     while [[ -h "$source" ]]
     do
-        local dir
+        local dir=""
 
-        dir="$(cd -P "$(dirname "$source")" >/dev/null 2>&1 && pwd)"
+        dir="$(
+            cd -P "$(dirname "$source")" >/dev/null 2>&1 &&
+            pwd
+        )"
 
         source="$(readlink "$source")"
 
@@ -73,6 +76,15 @@ get_script_dir()
 
 INSTALLER_ROOT="$(get_script_dir)"
 
+if [[ -z "$INSTALLER_ROOT" ]]
+then
+    printf '%s\n' \
+        "ERROR: cannot determine installer root" \
+        >&2
+
+    exit 1
+fi
+
 readonly INSTALLER_ROOT
 
 INSTALLER_LIB="$INSTALLER_ROOT/lib"
@@ -82,30 +94,58 @@ readonly INSTALLER_LIB
 readonly INSTALLER_MODULES
 
 #============================================================
-# Logging fallback
-#
-# logger.sh may not yet be loaded.
+# Bootstrap output
+#============================================================
+
+bootstrap_output()
+{
+    local message="${1-}"
+
+    #
+    # Prefer real terminal.
+    #
+    if [[ -e /dev/tty ]] &&
+       { : </dev/tty; } 2>/dev/null
+    then
+        printf '%s\n' "$message" >/dev/tty
+        return 0
+    fi
+
+    #
+    # Fallback to stderr.
+    #
+    printf '%s\n' "$message" >&2
+}
+
+#============================================================
+# Bootstrap logging
 #============================================================
 
 bootstrap_log()
 {
     local level="${1:-INFO}"
+
     shift || true
 
-    printf '[%s] [%s] %s\n' \
-        "$INSTALLER_NAME" \
-        "$level" \
-        "$*" \
-        >&2
+    bootstrap_output \
+        "[$INSTALLER_NAME] [$level] $*"
 }
 
 #============================================================
-# Load module
+# Load library
 #============================================================
 
 load_library()
 {
-    local file="$1"
+    local file="${1:-}"
+
+    if [[ -z "$file" ]]
+    then
+        bootstrap_log ERROR \
+            "load_library(): empty file path"
+
+        return 1
+    fi
 
     if [[ ! -f "$file" ]]
     then
@@ -115,8 +155,19 @@ load_library()
         return 1
     fi
 
+    bootstrap_log DEBUG \
+        "Loading library: $file"
+
     # shellcheck disable=SC1090
-    source "$file"
+    if ! source "$file"
+    then
+        bootstrap_log ERROR \
+            "Failed to load library: $file"
+
+        return 1
+    fi
+
+    return 0
 }
 
 #============================================================
@@ -135,13 +186,38 @@ load_logger()
         return 1
     fi
 
+    bootstrap_log DEBUG \
+        "Loading logger"
+
     # shellcheck disable=SC1090
-    source "$logger_file"
+    if ! source "$logger_file"
+    then
+        bootstrap_log ERROR \
+            "Failed to load logger.sh"
+
+        return 1
+    fi
+
+    if ! declare -F logger_init >/dev/null 2>&1
+    then
+        bootstrap_log ERROR \
+            "logger_init() is unavailable"
+
+        return 1
+    fi
 
     if ! declare -F logger_info >/dev/null 2>&1
     then
         bootstrap_log ERROR \
-            "logger.sh loaded but logger_info() is unavailable"
+            "logger_info() is unavailable"
+
+        return 1
+    fi
+
+    if ! declare -F logger_error >/dev/null 2>&1
+    then
+        bootstrap_log ERROR \
+            "logger_error() is unavailable"
 
         return 1
     fi
@@ -165,13 +241,38 @@ load_tui()
         return 1
     fi
 
+    logger_debug \
+        "Loading TUI: $tui_file"
+
     # shellcheck disable=SC1090
-    source "$tui_file"
+    if ! source "$tui_file"
+    then
+        logger_error \
+            "Failed to load tui.sh"
+
+        return 1
+    fi
 
     if ! declare -F tui_init >/dev/null 2>&1
     then
         logger_error \
             "tui.sh loaded but tui_init() is unavailable"
+
+        return 1
+    fi
+
+    if ! declare -F tui_start >/dev/null 2>&1
+    then
+        logger_error \
+            "tui.sh loaded but tui_start() is unavailable"
+
+        return 1
+    fi
+
+    if ! declare -F tui_restore >/dev/null 2>&1
+    then
+        logger_error \
+            "tui.sh loaded but tui_restore() is unavailable"
 
         return 1
     fi
@@ -195,8 +296,17 @@ load_main_menu()
         return 1
     fi
 
+    logger_debug \
+        "Loading main menu: $menu_file"
+
     # shellcheck disable=SC1090
-    source "$menu_file"
+    if ! source "$menu_file"
+    then
+        logger_error \
+            "Failed to load main menu: $menu_file"
+
+        return 1
+    fi
 
     if ! declare -F menu_main >/dev/null 2>&1
     then
@@ -218,9 +328,10 @@ check_environment()
     logger_debug \
         "Checking runtime environment"
 
-    #
-    # Bash version
-    #
+    #--------------------------------------------------------
+    # Bash
+    #--------------------------------------------------------
+
     if (( BASH_VERSINFO[0] < 5 ))
     then
         logger_error \
@@ -229,9 +340,10 @@ check_environment()
         return 1
     fi
 
-    #
+    #--------------------------------------------------------
     # Root
-    #
+    #--------------------------------------------------------
+
     if (( EUID != 0 ))
     then
         logger_error \
@@ -240,9 +352,10 @@ check_environment()
         return 1
     fi
 
-    #
-    # TTY
-    #
+    #--------------------------------------------------------
+    # /dev/tty
+    #--------------------------------------------------------
+
     if [[ ! -e /dev/tty ]]
     then
         logger_error \
@@ -251,18 +364,34 @@ check_environment()
         return 1
     fi
 
-    #
+    #--------------------------------------------------------
+    # Test /dev/tty
+    #--------------------------------------------------------
+
+    if ! { : </dev/tty; } 2>/dev/null
+    then
+        logger_error \
+            "Cannot access /dev/tty"
+
+        return 1
+    fi
+
+    #--------------------------------------------------------
     # Required commands
-    #
+    #--------------------------------------------------------
+
     local command
 
     for command in \
         bash \
         stty \
         tput \
+        tty \
         lsblk \
         mount \
-        umount
+        umount \
+        awk \
+        sed
     do
         if ! command -v "$command" >/dev/null 2>&1
         then
@@ -273,8 +402,20 @@ check_environment()
         fi
     done
 
+    #--------------------------------------------------------
+    # Verify actual TTY
+    #--------------------------------------------------------
+
+    if ! tty </dev/tty >/dev/null 2>&1
+    then
+        logger_error \
+            "/dev/tty is not a usable terminal"
+
+        return 1
+    fi
+
     logger_debug \
-        "Environment check passed"
+        "Runtime environment check passed"
 
     return 0
 }
@@ -292,27 +433,43 @@ cleanup_tui()
 
     INSTALLER_EXITING=1
 
-    if (( TUI_INITIALIZED ))
+    #
+    # tui.sh may not have been loaded yet.
+    #
+    if ! declare -F tui_restore >/dev/null 2>&1
     then
-        tui_restore || true
+        return 0
     fi
+
+    #
+    # Nothing to restore.
+    #
+    if [[ "${TUI_INITIALIZED:-0}" != "1" ]]
+    then
+        return 0
+    fi
+
+    tui_restore || true
 }
 
 #============================================================
-# Error handler
+# ERR handler
 #============================================================
 
 on_error()
 {
     local rc="$?"
-
     local line="${BASH_LINENO[0]:-unknown}"
     local command="${BASH_COMMAND:-unknown}"
 
     #
-    # Never attempt complex UI operations while the shell
-    # itself is processing an error.
+    # Do not process ERR twice.
     #
+    if (( INSTALLER_EXITING ))
+    then
+        return "$rc"
+    fi
+
     if declare -F logger_error >/dev/null 2>&1
     then
         logger_error \
@@ -337,11 +494,14 @@ on_exit()
 
     cleanup_tui
 
-    exit "$rc"
+    #
+    # Do not call exit from EXIT recursively.
+    #
+    return "$rc"
 }
 
 #============================================================
-# INT / TERM
+# INT
 #============================================================
 
 on_interrupt()
@@ -349,7 +509,10 @@ on_interrupt()
     if declare -F logger_warn >/dev/null 2>&1
     then
         logger_warn \
-            "Installer interrupted"
+            "Installer interrupted by user"
+    else
+        bootstrap_log WARN \
+            "Installer interrupted by user"
     fi
 
     cleanup_tui
@@ -357,11 +520,18 @@ on_interrupt()
     exit 130
 }
 
+#============================================================
+# TERM
+#============================================================
+
 on_term()
 {
     if declare -F logger_warn >/dev/null 2>&1
     then
         logger_warn \
+            "Installer terminated"
+    else
+        bootstrap_log WARN \
             "Installer terminated"
     fi
 
@@ -378,7 +548,6 @@ install_traps()
 {
     trap 'on_error' ERR
     trap 'on_exit' EXIT
-
     trap 'on_interrupt' INT
     trap 'on_term' TERM
 
@@ -391,9 +560,6 @@ install_traps()
 
 init_logger()
 {
-    #
-    # logger.sh must provide logger_init().
-    #
     if ! declare -F logger_init >/dev/null 2>&1
     then
         bootstrap_log ERROR \
@@ -402,10 +568,15 @@ init_logger()
         return 1
     fi
 
-    logger_init \
-        "$INSTALLER_ROOT"
+    if ! logger_init "$INSTALLER_ROOT"
+    then
+        bootstrap_log ERROR \
+            "logger_init() failed"
 
-    return $?
+        return 1
+    fi
+
+    return 0
 }
 
 #============================================================
@@ -417,13 +588,35 @@ init_tui()
     logger_debug \
         "Initializing TUI"
 
-    if ! tui_start
+    #
+    # Initialize only.
+    #
+    if ! tui_init
     then
         logger_error \
-            "Failed to start TUI"
+            "tui_init() failed"
 
         return 1
     fi
+
+    logger_debug \
+        "TUI initialized: ${TUI_COLS}x${TUI_ROWS}"
+
+    #
+    # Start TUI.
+    #
+    if ! tui_start
+    then
+        logger_error \
+            "tui_start() failed"
+
+        tui_restore || true
+
+        return 1
+    fi
+
+    logger_info \
+        "TUI started"
 
     return 0
 }
@@ -434,91 +627,119 @@ init_tui()
 
 main()
 {
-    #
     #--------------------------------------------------------
-    # Load logger first.
+    # Bootstrap message
     #--------------------------------------------------------
-    #
-    load_logger || \
-        return 1
 
-    #
+    bootstrap_log INFO \
+        "Starting $INSTALLER_NAME"
+
+    bootstrap_log DEBUG \
+        "ROOT: $INSTALLER_ROOT"
+
+    bootstrap_log DEBUG \
+        "LIB:  $INSTALLER_LIB"
+
+    bootstrap_log DEBUG \
+        "MOD:  $INSTALLER_MODULES"
+
     #--------------------------------------------------------
-    # Initialize logger.
+    # Install traps as early as possible
     #--------------------------------------------------------
-    #
-    init_logger || \
+
+    install_traps
+
+    #--------------------------------------------------------
+    # Logger
+    #--------------------------------------------------------
+
+    if ! load_logger
+    then
+        bootstrap_log ERROR \
+            "Failed to load logger"
+
         return 1
+    fi
+
+    if ! init_logger
+    then
+        bootstrap_log ERROR \
+            "Failed to initialize logger"
+
+        return 1
+    fi
 
     logger_info \
         "$INSTALLER_NAME starting"
 
-    logger_debug \
-        "ROOT: $INSTALLER_ROOT"
-
-    logger_debug \
-        "LIB:  $INSTALLER_LIB"
-
-    logger_debug \
-        "MOD:  $INSTALLER_MODULES"
-
-    #
     #--------------------------------------------------------
-    # Load TUI.
+    # Environment
     #--------------------------------------------------------
-    #
-    load_tui || \
+
+    if ! check_environment
+    then
+        logger_error \
+            "Environment check failed"
+
         return 1
+    fi
 
-    #
     #--------------------------------------------------------
-    # Install cleanup/error traps before starting TUI.
+    # TUI
     #--------------------------------------------------------
-    #
-    install_traps
 
-    #
-    #--------------------------------------------------------
-    # Environment.
-    #--------------------------------------------------------
-    #
-    check_environment || \
+    if ! load_tui
+    then
+        logger_error \
+            "Failed to load TUI"
+
         return 1
+    fi
 
-    #
-    #--------------------------------------------------------
-    # Start TUI.
-    #--------------------------------------------------------
-    #
-    init_tui || \
+    if ! init_tui
+    then
+        logger_error \
+            "Failed to initialize TUI"
+
         return 1
+    fi
 
-    INSTALLER_STARTED=1
+    #--------------------------------------------------------
+    # Main menu
+    #--------------------------------------------------------
 
-    #
-    #--------------------------------------------------------
-    # Load main menu.
-    #--------------------------------------------------------
-    #
-    load_main_menu || \
+    if ! load_main_menu
+    then
+        logger_error \
+            "Failed to load main menu"
+
         return 1
+    fi
 
-    #
-    #--------------------------------------------------------
-    # Run main menu.
-    #--------------------------------------------------------
-    #
     logger_info \
         "Starting main menu"
 
-    menu_main
-    local rc="$?"
-    logger_info \
-        "Main menu finished with rc=$rc"
-    return "$rc"
+    if menu_main
+    then
+        logger_info \
+            "Main menu finished successfully"
+
+        return 0
+    else
+        local rc="$?"
+
+        logger_error \
+            "Main menu finished with rc=$rc"
+
+        return "$rc"
+    fi
 }
+
 #============================================================
 # Entry point
 #============================================================
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]
+then
+    main "$@"
+fi

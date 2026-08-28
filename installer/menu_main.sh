@@ -8,24 +8,26 @@
 # Главное меню Arch Installer.
 #
 # Ответственность:
-#   • Отображение главного меню
-#   • Навигация
-#   • Запуск installer-модулей
-#   • Возврат результата
+#   • отображение главного меню
+#   • навигация
+#   • запуск installer controller
+#   • системная информация
+#   • shell
+#   • завершение installer
 #
 # Не содержит:
 #   • TTY logic
 #   • stty
-#   • ANSI-коды
 #   • keyboard parsing
-#   • drawing implementation
 #   • partition logic
 #   • filesystem logic
+#   • mount logic
 #   • package logic
 #   • bootloader logic
 #
 # Зависимости:
 #   • tui.sh
+#   • installer.sh
 #
 #============================================================
 
@@ -44,29 +46,34 @@ MENU_MAIN_ROOT="${INSTALLER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pw
 
 readonly MENU_MAIN_ROOT
 
-MENU_MAIN_MODULES="$MENU_MAIN_ROOT/modules"
+MENU_MAIN_INSTALLER="$MENU_MAIN_ROOT/installer"
 
-readonly MENU_MAIN_MODULES
+readonly MENU_MAIN_INSTALLER
 
 #============================================================
-# Module loader
+# Load installer controller
 #============================================================
 
-menu_main_load_module()
+menu_main_load_installer()
 {
-    local module="$1"
-    local file="$MENU_MAIN_MODULES/$module"
+    local file="$MENU_MAIN_INSTALLER/installer.sh"
 
     if [[ ! -f "$file" ]]
     then
         logger_error \
-            "Main menu: module not found: $file"
+            "Main menu: installer controller not found: $file"
 
         return 1
     fi
 
     # shellcheck disable=SC1090
-    source "$file"
+    if ! source "$file"
+    then
+        logger_error \
+            "Main menu: failed to load installer controller: $file"
+
+        return 1
+    fi
 
     return 0
 }
@@ -82,104 +89,79 @@ menu_main_header()
     titlebar_draw \
         "Arch Installer"
 
-    tui_move 3 5
+    tui_move \
+        3 \
+        5
 
     color_info \
         "Arch Linux Installation System"
 
-    tui_move 4 5
+    tui_move \
+        4 \
+        5
 
     tui_print \
         "Select an operation"
 }
 
 #============================================================
-# Installation modules
+# Partition
 #============================================================
 
 menu_main_partition()
 {
-    menu_main_load_module \
-        "partition.sh" || \
+    menu_main_load_installer || \
         return 1
 
-    if ! declare -F partition_main >/dev/null 2>&1
-    then
-        logger_error \
-            "partition.sh does not provide partition_main()"
-
-        return 1
-    fi
-
-    partition_main
+    installer_partition
 }
+
+#============================================================
+# Filesystem
+#============================================================
 
 menu_main_filesystem()
 {
-    menu_main_load_module \
-        "filesystem.sh" || \
+    menu_main_load_installer || \
         return 1
 
-    if ! declare -F filesystem_main >/dev/null 2>&1
-    then
-        logger_error \
-            "filesystem.sh does not provide filesystem_main()"
-
-        return 1
-    fi
-
-    filesystem_main
+    installer_filesystem
 }
+
+#============================================================
+# Mount
+#============================================================
 
 menu_main_mount()
 {
-    menu_main_load_module \
-        "mount.sh" || \
+    menu_main_load_installer || \
         return 1
 
-    if ! declare -F mount_main >/dev/null 2>&1
-    then
-        logger_error \
-            "mount.sh does not provide mount_main()"
-
-        return 1
-    fi
-
-    mount_main
+    installer_mount
 }
+
+#============================================================
+# Packages
+#============================================================
 
 menu_main_packages()
 {
-    menu_main_load_module \
-        "packages.sh" || \
+    menu_main_load_installer || \
         return 1
 
-    if ! declare -F packages_main >/dev/null 2>&1
-    then
-        logger_error \
-            "packages.sh does not provide packages_main()"
-
-        return 1
-    fi
-
-    packages_main
+    installer_packages
 }
+
+#============================================================
+# Bootloader
+#============================================================
 
 menu_main_bootloader()
 {
-    menu_main_load_module \
-        "bootloader.sh" || \
+    menu_main_load_installer || \
         return 1
 
-    if ! declare -F bootloader_main >/dev/null 2>&1
-    then
-        logger_error \
-            "bootloader.sh does not provide bootloader_main()"
-
-        return 1
-    fi
-
-    bootloader_main
+    installer_bootloader
 }
 
 #============================================================
@@ -191,69 +173,25 @@ menu_main_install()
     logger_info \
         "Full installation selected"
 
-    #
-    # Partition
-    #
-    if ! menu_main_partition
-    then
-        logger_warn \
-            "Partition stage cancelled or failed"
-
+    menu_main_load_installer || \
         return 1
+
+    if installer_run
+    then
+        logger_info \
+            "Full installation completed"
+
+        dialog_info \
+            "Installation complete" \
+            "Arch Linux installation completed successfully."
+
+        return 0
     fi
 
-    #
-    # Filesystem
-    #
-    if ! menu_main_filesystem
-    then
-        logger_warn \
-            "Filesystem stage cancelled or failed"
+    logger_error \
+        "Full installation failed at stage: ${INSTALLER_STAGE:-unknown}"
 
-        return 1
-    fi
-
-    #
-    # Mount
-    #
-    if ! menu_main_mount
-    then
-        logger_warn \
-            "Mount stage cancelled or failed"
-
-        return 1
-    fi
-
-    #
-    # Packages
-    #
-    if ! menu_main_packages
-    then
-        logger_warn \
-            "Package stage cancelled or failed"
-
-        return 1
-    fi
-
-    #
-    # Bootloader
-    #
-    if ! menu_main_bootloader
-    then
-        logger_warn \
-            "Bootloader stage cancelled or failed"
-
-        return 1
-    fi
-
-    logger_info \
-        "Full installation completed"
-
-    dialog_info \
-        "Installation complete" \
-        "Arch Linux installation completed successfully."
-
-    return 0
+    return "${INSTALLER_LAST_RC:-1}"
 }
 
 #============================================================
@@ -271,16 +209,20 @@ menu_main_system_info()
     arch="$(uname -m)"
 
     memory="$(
-        awk '/MemTotal:/ {
-            printf "%.0f MiB", $2 / 1024
-        }' /proc/meminfo
+        awk '
+            /MemTotal:/ {
+                printf "%.0f MiB", $2 / 1024
+            }
+        ' /proc/meminfo
     )"
 
     cpu="$(
-        awk -F: '/model name/ {
-            print $2
-            exit
-        }' /proc/cpuinfo |
+        awk -F: '
+            /model name/ {
+                print $2
+                exit
+            }
+        ' /proc/cpuinfo |
         sed 's/^ *//'
     )"
 
@@ -293,20 +235,40 @@ menu_main_system_info()
         12 \
         "$((TUI_COLS - 10))"
 
-    tui_move 6 8
-    tui_print "Kernel:  $kernel"
+    tui_move \
+        6 \
+        8
 
-    tui_move 7 8
-    tui_print "Arch:    $arch"
+    tui_print \
+        "Kernel:  $kernel"
 
-    tui_move 8 8
-    tui_print "Memory:  $memory"
+    tui_move \
+        7 \
+        8
 
-    tui_move 9 8
-    tui_print "CPU:     $cpu"
+    tui_print \
+        "Arch:    $arch"
 
-    tui_move 14 8
-    tui_print "Enter = Back"
+    tui_move \
+        8 \
+        8
+
+    tui_print \
+        "Memory:  $memory"
+
+    tui_move \
+        9 \
+        8
+
+    tui_print \
+        "CPU:     $cpu"
+
+    tui_move \
+        14 \
+        8
+
+    tui_print \
+        "Enter = Back"
 
     while true
     do
@@ -370,7 +332,8 @@ menu_main_exit()
 menu_main()
 {
     local selected=0
-    local result
+    local i
+
     local items=(
         "Full installation"
         "Partition disk"
@@ -390,9 +353,10 @@ menu_main()
     do
         menu_main_header
 
-        #
+        #----------------------------------------------------
         # Menu box
-        #
+        #----------------------------------------------------
+
         draw_box \
             6 \
             5 \
@@ -400,7 +364,9 @@ menu_main()
             "$(( ${#items[@]} + 4 ))" || \
             return 1
 
-        local i
+        #----------------------------------------------------
+        # Menu entries
+        #----------------------------------------------------
 
         for i in "${!items[@]}"
         do
@@ -418,8 +384,16 @@ menu_main()
             fi
         done
 
+        #----------------------------------------------------
+        # Status bar
+        #----------------------------------------------------
+
         statusbar_draw \
             '↑↓ Navigate   Home/End   Enter Select   Esc Exit'
+
+        #----------------------------------------------------
+        # Read event
+        #----------------------------------------------------
 
         event_read
 
@@ -452,9 +426,7 @@ menu_main()
                 ;;
 
             "$EVENT_SELECT")
-                result="$selected"
-
-                case "$result"
+                case "$selected"
                 in
                     0)
                         if ! menu_main_install
@@ -531,7 +503,6 @@ menu_main()
                             return 0
                         fi
                         ;;
-
                 esac
                 ;;
 
@@ -547,7 +518,3 @@ menu_main()
         esac
     done
 }
-
-#============================================================
-# End
-#============================================================

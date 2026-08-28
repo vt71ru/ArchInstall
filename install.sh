@@ -251,14 +251,6 @@ check_environment()
         return 1
     fi
 
-    if [[ ! -t /dev/tty ]]
-    then
-        logger_error \
-            "/dev/tty is not a terminal"
-
-        return 1
-    fi
-
     #
     # Required commands
     #

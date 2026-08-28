@@ -29,9 +29,9 @@ fi
 
 readonly TERMINAL_SH_LOADED=1
 
-#------------------------------------------------------------
+#============================================================
 # State
-#------------------------------------------------------------
+#============================================================
 
 TERMINAL_INITIALIZED=0
 TERMINAL_RAW=0
@@ -40,9 +40,18 @@ TERMINAL_CURSOR_HIDDEN=0
 
 TERMINAL_STTY_STATE=""
 
-#------------------------------------------------------------
+#============================================================
+# Internal: terminal availability
+#============================================================
+
+terminal_is_tty()
+{
+    [[ -t 0 && -t 1 ]]
+}
+
+#============================================================
 # Save terminal state
-#------------------------------------------------------------
+#============================================================
 
 terminal_save_state()
 {
@@ -54,7 +63,9 @@ terminal_save_state()
         return 1
     fi
 
-    if ! TERMINAL_STTY_STATE="$(stty -g 2>/dev/null)"
+    if ! TERMINAL_STTY_STATE="$(
+        stty -g 2>/dev/null
+    )"
     then
         logger_error \
             "Failed to read terminal state"
@@ -72,11 +83,13 @@ terminal_save_state()
 
     logger_debug \
         "Terminal state saved"
+
+    return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Enter raw-like mode
-#------------------------------------------------------------
+#============================================================
 
 terminal_raw()
 {
@@ -89,11 +102,12 @@ terminal_raw()
         -echo \
         -echonl \
         -icanon \
+        -ixon \
         min 1 \
         time 0
     then
         logger_error \
-            "Failed to enable terminal raw mode"
+            "Failed to enable terminal raw-like mode"
 
         return 1
     fi
@@ -101,12 +115,14 @@ terminal_raw()
     TERMINAL_RAW=1
 
     logger_debug \
-        "Terminal raw mode enabled"
+        "Terminal raw-like mode enabled"
+
+    return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Leave raw-like mode
-#------------------------------------------------------------
+#============================================================
 
 terminal_cooked()
 {
@@ -117,39 +133,40 @@ terminal_cooked()
 
     if [[ -n "$TERMINAL_STTY_STATE" ]]
     then
-        if ! stty \
+        if stty \
             "$TERMINAL_STTY_STATE"
         then
-            logger_warn \
-                "Failed to restore saved terminal state"
+            TERMINAL_RAW=0
 
-            if ! stty sane
-            then
-                logger_error \
-                    "Failed to restore terminal using sane mode"
+            logger_debug \
+                "Terminal input mode restored"
 
-                return 1
-            fi
+            return 0
         fi
-    else
-        if ! stty sane
-        then
-            logger_error \
-                "Failed to restore terminal using sane mode"
 
-            return 1
-        fi
+        logger_warn \
+            "Failed to restore saved terminal state"
     fi
 
-    TERMINAL_RAW=0
+    if stty sane
+    then
+        TERMINAL_RAW=0
 
-    logger_debug \
-        "Terminal input mode restored"
+        logger_debug \
+            "Terminal restored using sane mode"
+
+        return 0
+    fi
+
+    logger_error \
+        "Failed to restore terminal mode"
+
+    return 1
 }
 
-#------------------------------------------------------------
+#============================================================
 # Enter alternate screen
-#------------------------------------------------------------
+#============================================================
 
 terminal_enter_alt_screen()
 {
@@ -165,11 +182,13 @@ terminal_enter_alt_screen()
 
     logger_debug \
         "Alternate screen enabled"
+
+    return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Leave alternate screen
-#------------------------------------------------------------
+#============================================================
 
 terminal_leave_alt_screen()
 {
@@ -184,11 +203,13 @@ terminal_leave_alt_screen()
 
     logger_debug \
         "Alternate screen disabled"
+
+    return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Hide cursor
-#------------------------------------------------------------
+#============================================================
 
 terminal_hide_cursor()
 {
@@ -203,11 +224,13 @@ terminal_hide_cursor()
 
     logger_debug \
         "Terminal cursor hidden"
+
+    return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Show cursor
-#------------------------------------------------------------
+#============================================================
 
 terminal_show_cursor()
 {
@@ -222,11 +245,13 @@ terminal_show_cursor()
 
     logger_debug \
         "Terminal cursor shown"
+
+    return 0
 }
 
-#------------------------------------------------------------
+#============================================================
 # Set terminal title
-#------------------------------------------------------------
+#============================================================
 
 terminal_title()
 {
@@ -237,9 +262,9 @@ terminal_title()
         "$title"
 }
 
-#------------------------------------------------------------
+#============================================================
 # Reset terminal title
-#------------------------------------------------------------
+#============================================================
 
 terminal_reset_title()
 {
@@ -247,103 +272,22 @@ terminal_reset_title()
         '\033]0;\007'
 }
 
-#------------------------------------------------------------
-# Initialize terminal
-#------------------------------------------------------------
-
-terminal_init()
-{
-    if (( TERMINAL_INITIALIZED ))
-    then
-        return 0
-    fi
-
-    if [[ ! -t 0 || ! -t 1 ]]
-    then
-        logger_error \
-            "TUI requires interactive stdin/stdout"
-
-        return 1
-    fi
-
-    terminal_save_state || \
-        return 1
-
-    if ! terminal_enter_alt_screen
-    then
-        logger_error \
-            "Failed to enter alternate screen"
-
-        return 1
-    fi
-
-    if ! terminal_raw
-    then
-        terminal_leave_alt_screen || true
-
-        return 1
-    fi
-
-    if ! terminal_hide_cursor
-    then
-        terminal_cooked || true
-        terminal_leave_alt_screen || true
-
-        return 1
-    fi
-
-    TERMINAL_INITIALIZED=1
-
-    logger_info \
-        "Terminal initialized"
-}
-
-#------------------------------------------------------------
-# Flush terminal output
-#------------------------------------------------------------
-
-terminal_flush()
-{
-    printf '%s' ''
-}
-
-#------------------------------------------------------------
-# Restore terminal
-#------------------------------------------------------------
-
-terminal_restore()
-{
-    terminal_show_cursor || true
-
-    terminal_cooked || true
-
-    terminal_leave_alt_screen || true
-
-    terminal_reset_title || true
-
-    TERMINAL_INITIALIZED=0
-
-    logger_debug \
-        "Terminal restored"
-}
-
-#------------------------------------------------------------
+#============================================================
 # Terminal rows
-#------------------------------------------------------------
+#============================================================
 
 terminal_rows()
 {
     local rows
 
     rows="$(
-        tput lines 2>/dev/null \
-            || printf '0'
+        tput lines 2>/dev/null ||
+        printf '0'
     )"
 
     if [[ ! "$rows" =~ ^[0-9]+$ ]]
     then
         printf '0'
-
         return 0
     fi
 
@@ -351,23 +295,22 @@ terminal_rows()
         "$rows"
 }
 
-#------------------------------------------------------------
+#============================================================
 # Terminal columns
-#------------------------------------------------------------
+#============================================================
 
 terminal_cols()
 {
     local cols
 
     cols="$(
-        tput cols 2>/dev/null \
-            || printf '0'
+        tput cols 2>/dev/null ||
+        printf '0'
     )"
 
     if [[ ! "$cols" =~ ^[0-9]+$ ]]
     then
         printf '0'
-
         return 0
     fi
 
@@ -375,9 +318,9 @@ terminal_cols()
         "$cols"
 }
 
-#------------------------------------------------------------
+#============================================================
 # Check minimum terminal size
-#------------------------------------------------------------
+#============================================================
 
 terminal_check_size()
 {
@@ -392,18 +335,10 @@ terminal_check_size()
         terminal_cols
     )"
 
-    if [[ ! "$rows" =~ ^[0-9]+$ ]]
+    if (( rows == 0 || cols == 0 ))
     then
         logger_error \
-            "Invalid terminal row count: ${rows}"
-
-        return 1
-    fi
-
-    if [[ ! "$cols" =~ ^[0-9]+$ ]]
-    then
-        logger_error \
-            "Invalid terminal column count: ${cols}"
+            "Unable to determine terminal size"
 
         return 1
     fi
@@ -411,7 +346,7 @@ terminal_check_size()
     if (( rows < 20 || cols < 70 ))
     then
         logger_warn \
-            "Terminal too small: ${cols}x${rows}"
+            "Terminal too small: ${cols}x${rows}; minimum is 70x20"
 
         return 1
     fi
@@ -422,9 +357,120 @@ terminal_check_size()
     return 0
 }
 
-#------------------------------------------------------------
+#============================================================
+# Initialize terminal
+#============================================================
+
+terminal_init()
+{
+    if (( TERMINAL_INITIALIZED ))
+    then
+        return 0
+    fi
+
+    if ! terminal_is_tty
+    then
+        logger_error \
+            "TUI requires interactive stdin/stdout"
+
+        return 1
+    fi
+
+    terminal_save_state || \
+        return 1
+
+    if ! terminal_check_size
+    then
+        TERMINAL_STTY_STATE=""
+        return 1
+    fi
+
+    if ! terminal_enter_alt_screen
+    then
+        TERMINAL_STTY_STATE=""
+        return 1
+    fi
+
+    if ! terminal_raw
+    then
+        terminal_leave_alt_screen || true
+        TERMINAL_STTY_STATE=""
+        return 1
+    fi
+
+    if ! terminal_hide_cursor
+    then
+        terminal_cooked || true
+        terminal_leave_alt_screen || true
+        TERMINAL_STTY_STATE=""
+        return 1
+    fi
+
+    TERMINAL_INITIALIZED=1
+
+    logger_info \
+        "Terminal initialized"
+
+    return 0
+}
+
+#============================================================
+# Flush terminal output
+#============================================================
+
+terminal_flush()
+{
+    printf ''
+}
+
+#============================================================
+# Restore terminal
+#============================================================
+
+terminal_restore()
+{
+    local failed=0
+
+    if (( TERMINAL_CURSOR_HIDDEN ))
+    then
+        terminal_show_cursor || \
+            failed=1
+    fi
+
+    if (( TERMINAL_RAW ))
+    then
+        terminal_cooked || \
+            failed=1
+    fi
+
+    if (( TERMINAL_ALT_SCREEN ))
+    then
+        terminal_leave_alt_screen || \
+            failed=1
+    fi
+
+    terminal_reset_title || \
+        failed=1
+
+    TERMINAL_INITIALIZED=0
+
+    if (( failed ))
+    then
+        logger_error \
+            "Terminal restoration completed with errors"
+
+        return 1
+    fi
+
+    logger_debug \
+        "Terminal restored"
+
+    return 0
+}
+
+#============================================================
 # Suspend TUI
-#------------------------------------------------------------
+#============================================================
 
 terminal_suspend()
 {
@@ -434,9 +480,9 @@ terminal_suspend()
     terminal_restore
 }
 
-#------------------------------------------------------------
+#============================================================
 # Resume TUI
-#------------------------------------------------------------
+#============================================================
 
 terminal_resume()
 {

@@ -13,6 +13,7 @@
 #   • Включение/выключение alternate screen
 #   • Скрытие/показ курсора
 #   • Установка title
+#   • Проверка размера терминала
 #   • Полное восстановление терминала
 #
 #  Не содержит:
@@ -21,7 +22,10 @@
 #   • Отрисовку widgets
 #============================================================
 
-[[ -n "${TERMINAL_SH_LOADED:-}" ]] && return
+if [[ -n "${TERMINAL_SH_LOADED:-}" ]]
+then
+    return 0
+fi
 
 readonly TERMINAL_SH_LOADED=1
 
@@ -50,14 +54,18 @@ terminal_save_state()
         return 1
     fi
 
-    TERMINAL_STTY_STATE="$(
-        stty -g
-    )"
+    if ! TERMINAL_STTY_STATE="$(stty -g 2>/dev/null)"
+    then
+        logger_error \
+            "Failed to read terminal state"
+
+        return 1
+    fi
 
     if [[ -z "$TERMINAL_STTY_STATE" ]]
     then
         logger_error \
-            "Failed to save terminal state"
+            "Terminal state is empty"
 
         return 1
     fi
@@ -67,7 +75,7 @@ terminal_save_state()
 }
 
 #------------------------------------------------------------
-# Enter raw mode
+# Enter raw-like mode
 #------------------------------------------------------------
 
 terminal_raw()
@@ -77,12 +85,18 @@ terminal_raw()
         return 0
     fi
 
-    stty \
+    if ! stty \
         -echo \
         -echonl \
         -icanon \
         min 1 \
         time 0
+    then
+        logger_error \
+            "Failed to enable terminal raw mode"
+
+        return 1
+    fi
 
     TERMINAL_RAW=1
 
@@ -91,7 +105,7 @@ terminal_raw()
 }
 
 #------------------------------------------------------------
-# Leave raw mode
+# Leave raw-like mode
 #------------------------------------------------------------
 
 terminal_cooked()
@@ -103,11 +117,28 @@ terminal_cooked()
 
     if [[ -n "$TERMINAL_STTY_STATE" ]]
     then
-        stty \
+        if ! stty \
             "$TERMINAL_STTY_STATE"
+        then
+            logger_warn \
+                "Failed to restore saved terminal state"
+
+            if ! stty sane
+            then
+                logger_error \
+                    "Failed to restore terminal using sane mode"
+
+                return 1
+            fi
+        fi
     else
-        stty \
-            sane
+        if ! stty sane
+        then
+            logger_error \
+                "Failed to restore terminal using sane mode"
+
+            return 1
+        fi
     fi
 
     TERMINAL_RAW=0
@@ -169,6 +200,9 @@ terminal_hide_cursor()
     printf '\033[?25l'
 
     TERMINAL_CURSOR_HIDDEN=1
+
+    logger_debug \
+        "Terminal cursor hidden"
 }
 
 #------------------------------------------------------------
@@ -185,6 +219,9 @@ terminal_show_cursor()
     printf '\033[?25h'
 
     TERMINAL_CURSOR_HIDDEN=0
+
+    logger_debug \
+        "Terminal cursor shown"
 }
 
 #------------------------------------------------------------
@@ -201,7 +238,7 @@ terminal_title()
 }
 
 #------------------------------------------------------------
-# Reset title
+# Reset terminal title
 #------------------------------------------------------------
 
 terminal_reset_title()
@@ -211,7 +248,7 @@ terminal_reset_title()
 }
 
 #------------------------------------------------------------
-# Initialize
+# Initialize terminal
 #------------------------------------------------------------
 
 terminal_init()
@@ -221,7 +258,7 @@ terminal_init()
         return 0
     fi
 
-    if ! [[ -t 0 && -t 1 ]]
+    if [[ ! -t 0 || ! -t 1 ]]
     then
         logger_error \
             "TUI requires interactive stdin/stdout"
@@ -232,14 +269,28 @@ terminal_init()
     terminal_save_state || \
         return 1
 
-    terminal_enter_alt_screen
+    if ! terminal_enter_alt_screen
+    then
+        logger_error \
+            "Failed to enter alternate screen"
 
-    terminal_raw || {
-        terminal_leave_alt_screen || true
         return 1
-    }
+    fi
 
-    terminal_hide_cursor
+    if ! terminal_raw
+    then
+        terminal_leave_alt_screen || true
+
+        return 1
+    fi
+
+    if ! terminal_hide_cursor
+    then
+        terminal_cooked || true
+        terminal_leave_alt_screen || true
+
+        return 1
+    fi
 
     TERMINAL_INITIALIZED=1
 
@@ -253,7 +304,7 @@ terminal_init()
 
 terminal_flush()
 {
-    printf ''
+    printf '%s' ''
 }
 
 #------------------------------------------------------------
@@ -262,10 +313,6 @@ terminal_flush()
 
 terminal_restore()
 {
-    #
-    # Reverse order of initialization.
-    #
-
     terminal_show_cursor || true
 
     terminal_cooked || true
@@ -281,7 +328,7 @@ terminal_restore()
 }
 
 #------------------------------------------------------------
-# Resize / window size
+# Terminal rows
 #------------------------------------------------------------
 
 terminal_rows()
@@ -293,9 +340,20 @@ terminal_rows()
             || printf '0'
     )"
 
+    if [[ ! "$rows" =~ ^[0-9]+$ ]]
+    then
+        printf '0'
+
+        return 0
+    fi
+
     printf '%s' \
         "$rows"
 }
+
+#------------------------------------------------------------
+# Terminal columns
+#------------------------------------------------------------
 
 terminal_cols()
 {
@@ -305,6 +363,13 @@ terminal_cols()
         tput cols 2>/dev/null \
             || printf '0'
     )"
+
+    if [[ ! "$cols" =~ ^[0-9]+$ ]]
+    then
+        printf '0'
+
+        return 0
+    fi
 
     printf '%s' \
         "$cols"
@@ -327,20 +392,32 @@ terminal_check_size()
         terminal_cols
     )"
 
-    [[ "$rows" =~ ^[0-9]+$ ]] || \
-        return 1
+    if [[ ! "$rows" =~ ^[0-9]+$ ]]
+    then
+        logger_error \
+            "Invalid terminal row count: ${rows}"
 
-    [[ "$cols" =~ ^[0-9]+$ ]] || \
         return 1
+    fi
 
-    if (( rows < 20 ||
-          cols < 70 ))
+    if [[ ! "$cols" =~ ^[0-9]+$ ]]
+    then
+        logger_error \
+            "Invalid terminal column count: ${cols}"
+
+        return 1
+    fi
+
+    if (( rows < 20 || cols < 70 ))
     then
         logger_warn \
             "Terminal too small: ${cols}x${rows}"
 
         return 1
     fi
+
+    logger_debug \
+        "Terminal size is sufficient: ${cols}x${rows}"
 
     return 0
 }
@@ -351,6 +428,9 @@ terminal_check_size()
 
 terminal_suspend()
 {
+    logger_debug \
+        "Suspending terminal UI"
+
     terminal_restore
 }
 
@@ -365,5 +445,12 @@ terminal_resume()
         return 0
     fi
 
+    logger_debug \
+        "Resuming terminal UI"
+
     terminal_init
 }
+
+#============================================================
+# End
+#============================================================

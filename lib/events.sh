@@ -1,3 +1,4 @@
+```bash
 #!/usr/bin/env bash
 #
 #============================================================
@@ -11,6 +12,7 @@
 #  • Чтение управляющих последовательностей терминала
 #  • Распознавание клавиш
 #  • Преобразование клавиш в EVENT_*
+#  • Передача обычных printable-символов в EVENT_CHAR
 #
 # Не содержит:
 #  • Логику меню
@@ -66,11 +68,39 @@ readonly EVENT_F12="F12"
 
 readonly EVENT_HELP="HELP"
 
+readonly EVENT_CHAR="CHAR"
+
+#============================================================
+# Character state
+#============================================================
+
+EVENT_CHAR_VALUE=""
+
 #============================================================
 # Timing
 #============================================================
 
 readonly EVENT_ESCAPE_TIMEOUT="${EVENT_ESCAPE_TIMEOUT:-0.08}"
+
+#============================================================
+# Character helpers
+#============================================================
+
+event_set_char()
+{
+    EVENT_CHAR_VALUE="${1-}"
+}
+
+event_get_char()
+{
+    printf '%s' \
+        "$EVENT_CHAR_VALUE"
+}
+
+event_clear_char()
+{
+    EVENT_CHAR_VALUE=""
+}
 
 #============================================================
 # Read escape sequence
@@ -81,19 +111,20 @@ event_read_escape()
     local sequence=""
     local byte=""
 
+    event_clear_char
+
     if ! IFS= read \
         -rsn1 \
         -t "$EVENT_ESCAPE_TIMEOUT" \
         byte
     then
-        # Standalone ESC = Back.
         printf '%s' \
             "$EVENT_BACK"
 
         return 0
     fi
 
-    sequence+="$byte"
+    sequence="$byte"
 
     case "$sequence"
     in
@@ -289,22 +320,22 @@ event_read_csi()
                 "$EVENT_F12"
             ;;
 
-        "[1;5A"|"[1;2A")
+        "[1;5A"|"[1;2A"|"[1;3A"|"[1;4A")
             printf '%s' \
                 "$EVENT_UP"
             ;;
 
-        "[1;5B"|"[1;2B")
+        "[1;5B"|"[1;2B"|"[1;3B"|"[1;4B")
             printf '%s' \
                 "$EVENT_DOWN"
             ;;
 
-        "[1;5C"|"[1;2C")
+        "[1;5C"|"[1;2C"|"[1;3C"|"[1;4C")
             printf '%s' \
                 "$EVENT_RIGHT"
             ;;
 
-        "[1;5D"|"[1;2D")
+        "[1;5D"|"[1;2D"|"[1;3D"|"[1;4D")
             printf '%s' \
                 "$EVENT_LEFT"
             ;;
@@ -323,6 +354,8 @@ event_read_csi()
 event_read_ss3()
 {
     local key=""
+
+    event_clear_char
 
     if ! IFS= read \
         -rsn1 \
@@ -395,12 +428,14 @@ event_read_ss3()
 }
 
 #============================================================
-# Read event
+# Read one event
 #============================================================
 
 event_read()
 {
     local key=""
+
+    event_clear_char
 
     if ! IFS= read \
         -rsn1 \
@@ -444,8 +479,13 @@ event_read()
             ;;
 
         *)
+            #
+            # Printable character.
+            #
+            event_set_char "$key"
+
             printf '%s' \
-                "$EVENT_NONE"
+                "$EVENT_CHAR"
             ;;
     esac
 }
@@ -482,6 +522,11 @@ event_is_back()
 event_is_space()
 {
     [[ "${1:-}" == "$EVENT_SPACE" ]]
+}
+
+event_is_char()
+{
+    [[ "${1:-}" == "$EVENT_CHAR" ]]
 }
 
 event_is_up()

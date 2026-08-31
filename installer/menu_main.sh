@@ -1,11 +1,23 @@
 #!/usr/bin/env bash
 #
 #============================================================
-#  Arch Installer
+# Arch Installer
 #------------------------------------------------------------
-#  menu_main.sh
+# installer/menu_main.sh
 #
-#  Главное меню Arch Installer.
+# Главное меню Arch Installer.
+#
+# Ответственность:
+#   • отображение главного меню
+#   • обработка клавиатуры
+#   • вызов controller API
+#   • отображение ошибок операций
+#
+# Не отвечает за:
+#   • реализацию этапов установки
+#   • хранение конфигурации
+#   • загрузку модулей
+#   • инициализацию TUI
 #
 #============================================================
 
@@ -57,6 +69,32 @@ menu_main_log_error()
 }
 
 #============================================================
+# Check controller
+#============================================================
+
+menu_main_check_controller()
+{
+    local function_name
+
+    for function_name in \
+        installer_run \
+        installer_full_install \
+        installer_run_stage \
+        installer_get_stage_title
+    do
+        if ! declare -F "$function_name" >/dev/null 2>&1
+        then
+            menu_main_log_error \
+                "Controller function unavailable: ${function_name}"
+
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+#============================================================
 # Header
 #============================================================
 
@@ -67,12 +105,14 @@ menu_main_header()
     if declare -F titlebar_draw >/dev/null 2>&1
     then
         titlebar_draw \
-            "Arch Installer" || return 1
+            "Arch Installer" \
+            || return 1
     fi
 
     tui_move \
         3 \
-        5 || return 1
+        5 \
+        || return 1
 
     if declare -F color_info >/dev/null 2>&1
     then
@@ -85,7 +125,8 @@ menu_main_header()
 
     tui_move \
         4 \
-        5 || return 1
+        5 \
+        || return 1
 
     tui_print \
         "Select an operation"
@@ -109,14 +150,78 @@ menu_main_operation_failed()
     then
         dialog_error \
             "$stage" \
-            "$message"
+            "$message" \
+            || true
     else
+        tui_clear 2>/dev/null || true
+
         printf '\n'
         printf '========================================\n'
         printf ' %s\n' "$stage"
         printf '========================================\n'
         printf '%s\n' "$message"
         printf '\n'
+
+        printf 'Press Enter to continue...\n'
+
+        read -r </dev/tty || true
+    fi
+
+    return 0
+}
+
+#============================================================
+# Run controller stage
+#============================================================
+
+menu_main_run_stage()
+{
+    local stage="${1:-}"
+    local title
+    local rc
+
+    if [[ -z "$stage" ]]
+    then
+        menu_main_operation_failed \
+            "Installer" \
+            "Stage name is empty."
+
+        return 1
+    fi
+
+    if ! declare -F installer_run_stage >/dev/null 2>&1
+    then
+        menu_main_operation_failed \
+            "Installer" \
+            "installer_run_stage() is not available."
+
+        return 1
+    fi
+
+    title="$(
+        installer_get_stage_title \
+            "$stage" \
+            2>/dev/null \
+            || printf '%s' "$stage"
+    )"
+
+    menu_main_log_info \
+        "Manual stage selected: ${stage}"
+
+    if installer_run_stage "$stage"
+    then
+        rc=0
+    else
+        rc=$?
+    fi
+
+    if (( rc != 0 ))
+    then
+        menu_main_operation_failed \
+            "$title" \
+            "Operation failed. Return code: ${rc}"
+
+        return "$rc"
     fi
 
     return 0
@@ -128,10 +233,7 @@ menu_main_operation_failed()
 
 menu_main_install()
 {
-    local rc=0
-    local stage="unknown"
-    local last_function="unknown"
-    local last_message="unknown"
+    local rc
 
     menu_main_log_info \
         "========================================"
@@ -148,9 +250,6 @@ menu_main_install()
 
     if ! declare -F installer_full_install >/dev/null 2>&1
     then
-        menu_main_log_error \
-            "installer_full_install() is not available"
-
         menu_main_operation_failed \
             "Installation" \
             "installer_full_install() is not available."
@@ -159,13 +258,12 @@ menu_main_install()
     fi
 
     #--------------------------------------------------------
-    # Prepare installation screen
+    # Installation screen
     #--------------------------------------------------------
 
-    if declare -F tui_clear >/dev/null 2>&1
-    then
-        tui_clear || true
-    fi
+    tui_clear \
+        2>/dev/null \
+        || true
 
     if declare -F titlebar_draw >/dev/null 2>&1
     then
@@ -174,18 +272,16 @@ menu_main_install()
             || true
     fi
 
-    if declare -F tui_move >/dev/null 2>&1
-    then
-        tui_move \
-            4 \
-            5 || true
-    fi
+    tui_move \
+        4 \
+        5 \
+        2>/dev/null \
+        || true
 
-    if declare -F tui_print >/dev/null 2>&1
-    then
-        tui_print \
-            "Starting full Arch Linux installation..."
-    fi
+    tui_print \
+        "Starting full Arch Linux installation..." \
+        2>/dev/null \
+        || true
 
     if declare -F screen_refresh >/dev/null 2>&1
     then
@@ -198,7 +294,7 @@ menu_main_install()
         "Calling installer_full_install()"
 
     #--------------------------------------------------------
-    # Run controller
+    # Run full installation
     #--------------------------------------------------------
 
     if installer_full_install
@@ -209,38 +305,7 @@ menu_main_install()
     fi
 
     #--------------------------------------------------------
-    # Read controller state
-    #--------------------------------------------------------
-
-    if declare -F installer_get_stage >/dev/null 2>&1
-    then
-        stage="$(
-            installer_get_stage \
-                2>/dev/null \
-                || printf '%s' "unknown"
-        )"
-    fi
-
-    if declare -F installer_get_last_function >/dev/null 2>&1
-    then
-        last_function="$(
-            installer_get_last_function \
-                2>/dev/null \
-                || printf '%s' "unknown"
-        )"
-    fi
-
-    if declare -F installer_get_last_message >/dev/null 2>&1
-    then
-        last_message="$(
-            installer_get_last_message \
-                2>/dev/null \
-                || printf '%s' "unknown"
-        )"
-    fi
-
-    #--------------------------------------------------------
-    # Success
+    # Result
     #--------------------------------------------------------
 
     if (( rc == 0 ))
@@ -252,13 +317,23 @@ menu_main_install()
         then
             dialog_info \
                 "Installation complete" \
-                "Full Arch Linux installation completed successfully."
+                "Full Arch Linux installation completed successfully." \
+                || true
         else
+            tui_clear \
+                2>/dev/null \
+                || true
+
             printf '\n'
             printf '========================================\n'
             printf ' INSTALLATION COMPLETED\n'
             printf '========================================\n'
             printf '\n'
+            printf 'Full Arch Linux installation completed.\n'
+            printf '\n'
+            printf 'Press Enter to return to the main menu...\n'
+
+            read -r </dev/tty || true
         fi
 
         return 0
@@ -272,37 +347,11 @@ menu_main_install()
         "Full installation failed"
 
     menu_main_log_error \
-        "Stage: ${stage}"
-
-    menu_main_log_error \
-        "Function: ${last_function}"
-
-    menu_main_log_error \
         "Return code: ${rc}"
 
-    menu_main_log_error \
-        "Message: ${last_message}"
-
-    if declare -F dialog_error >/dev/null 2>&1
-    then
-        dialog_error \
-            "Installation failed" \
-            "Stage: ${stage}\nFunction: ${last_function}\nReturn code: ${rc}"
-    else
-        printf '\n'
-        printf '========================================\n'
-        printf ' INSTALLATION FAILED\n'
-        printf '========================================\n'
-        printf '\n'
-        printf 'Stage    : %s\n' "$stage"
-        printf 'Function : %s\n' "$last_function"
-        printf 'Return   : %s\n' "$rc"
-        printf 'Message  : %s\n' "$last_message"
-        printf '\n'
-        printf 'Log      : %s\n' \
-            "${LOGGER_FILE:-/tmp/arch-installer.log}"
-        printf '\n'
-    fi
+    menu_main_operation_failed \
+        "Installation failed" \
+        "Full installation failed. Return code: ${rc}"
 
     return "$rc"
 }
@@ -313,37 +362,8 @@ menu_main_install()
 
 menu_main_partition()
 {
-    local rc=0
-
-    menu_main_log_info \
-        "Partition selected"
-
-    if ! declare -F installer_partition >/dev/null 2>&1
-    then
-        menu_main_operation_failed \
-            "Partition" \
-            "installer_partition() is not available."
-
-        return 1
-    fi
-
-    if installer_partition
-    then
-        rc=0
-    else
-        rc=$?
-    fi
-
-    if (( rc != 0 ))
-    then
-        menu_main_operation_failed \
-            "Partition" \
-            "Partitioning failed. Return code: ${rc}"
-
-        return "$rc"
-    fi
-
-    return 0
+    menu_main_run_stage \
+        partition
 }
 
 #============================================================
@@ -352,37 +372,8 @@ menu_main_partition()
 
 menu_main_filesystem()
 {
-    local rc=0
-
-    menu_main_log_info \
-        "Filesystem selected"
-
-    if ! declare -F installer_filesystem >/dev/null 2>&1
-    then
-        menu_main_operation_failed \
-            "Filesystem" \
-            "installer_filesystem() is not available."
-
-        return 1
-    fi
-
-    if installer_filesystem
-    then
-        rc=0
-    else
-        rc=$?
-    fi
-
-    if (( rc != 0 ))
-    then
-        menu_main_operation_failed \
-            "Filesystem" \
-            "Filesystem stage failed. Return code: ${rc}"
-
-        return "$rc"
-    fi
-
-    return 0
+    menu_main_run_stage \
+        filesystem
 }
 
 #============================================================
@@ -391,37 +382,8 @@ menu_main_filesystem()
 
 menu_main_mount()
 {
-    local rc=0
-
-    menu_main_log_info \
-        "Mount selected"
-
-    if ! declare -F installer_mount >/dev/null 2>&1
-    then
-        menu_main_operation_failed \
-            "Mount" \
-            "installer_mount() is not available."
-
-        return 1
-    fi
-
-    if installer_mount
-    then
-        rc=0
-    else
-        rc=$?
-    fi
-
-    if (( rc != 0 ))
-    then
-        menu_main_operation_failed \
-            "Mount" \
-            "Mount stage failed. Return code: ${rc}"
-
-        return "$rc"
-    fi
-
-    return 0
+    menu_main_run_stage \
+        mount
 }
 
 #============================================================
@@ -430,37 +392,8 @@ menu_main_mount()
 
 menu_main_packages()
 {
-    local rc=0
-
-    menu_main_log_info \
-        "Packages selected"
-
-    if ! declare -F installer_packages >/dev/null 2>&1
-    then
-        menu_main_operation_failed \
-            "Packages" \
-            "installer_packages() is not available."
-
-        return 1
-    fi
-
-    if installer_packages
-    then
-        rc=0
-    else
-        rc=$?
-    fi
-
-    if (( rc != 0 ))
-    then
-        menu_main_operation_failed \
-            "Packages" \
-            "Package installation failed. Return code: ${rc}"
-
-        return "$rc"
-    fi
-
-    return 0
+    menu_main_run_stage \
+        packages
 }
 
 #============================================================
@@ -469,37 +402,8 @@ menu_main_packages()
 
 menu_main_bootloader()
 {
-    local rc=0
-
-    menu_main_log_info \
-        "Bootloader selected"
-
-    if ! declare -F installer_bootloader >/dev/null 2>&1
-    then
-        menu_main_operation_failed \
-            "Bootloader" \
-            "installer_bootloader() is not available."
-
-        return 1
-    fi
-
-    if installer_bootloader
-    then
-        rc=0
-    else
-        rc=$?
-    fi
-
-    if (( rc != 0 ))
-    then
-        menu_main_operation_failed \
-            "Bootloader" \
-            "Bootloader installation failed. Return code: ${rc}"
-
-        return "$rc"
-    fi
-
-    return 0
+    menu_main_run_stage \
+        bootloader
 }
 
 #============================================================
@@ -513,8 +417,17 @@ menu_main_system_info()
     local memory=""
     local cpu=""
 
-    kernel="$(uname -r)"
-    arch="$(uname -m)"
+    kernel="$(
+        uname -r \
+            2>/dev/null \
+            || printf '%s' "unknown"
+    )"
+
+    arch="$(
+        uname -m \
+            2>/dev/null \
+            || printf '%s' "unknown"
+    )"
 
     memory="$(
         awk '
@@ -535,7 +448,8 @@ menu_main_system_info()
         sed 's/^ *//'
     )"
 
-    tui_clear || return 1
+    tui_clear \
+        || return 1
 
     if declare -F draw_panel >/dev/null 2>&1
     then
@@ -548,20 +462,45 @@ menu_main_system_info()
             || return 1
     fi
 
-    tui_move 6 8 || return 1
-    tui_print "Kernel:  ${kernel}"
+    tui_move \
+        6 \
+        8 \
+        || return 1
 
-    tui_move 7 8 || return 1
-    tui_print "Arch:    ${arch}"
+    tui_print \
+        "Kernel:  ${kernel}"
 
-    tui_move 8 8 || return 1
-    tui_print "Memory:  ${memory}"
+    tui_move \
+        7 \
+        8 \
+        || return 1
 
-    tui_move 9 8 || return 1
-    tui_print "CPU:     ${cpu:-unknown}"
+    tui_print \
+        "Arch:    ${arch}"
 
-    tui_move 11 8 || return 1
-    tui_print "Press Enter or Esc to return."
+    tui_move \
+        8 \
+        8 \
+        || return 1
+
+    tui_print \
+        "Memory:  ${memory:-unknown}"
+
+    tui_move \
+        9 \
+        8 \
+        || return 1
+
+    tui_print \
+        "CPU:     ${cpu:-unknown}"
+
+    tui_move \
+        11 \
+        8 \
+        || return 1
+
+    tui_print \
+        "Press Enter or Esc to return."
 
     if declare -F statusbar_draw >/dev/null 2>&1
     then
@@ -579,9 +518,11 @@ menu_main_system_info()
         event_read
 
         case "${TUI_EVENT:-}" in
+
             "$EVENT_SELECT"|"$EVENT_BACK")
                 return 0
                 ;;
+
         esac
     done
 }
@@ -592,14 +533,19 @@ menu_main_system_info()
 
 menu_main_shell()
 {
-    local rc=0
+    local rc
 
     menu_main_log_info \
         "Opening installer shell"
 
+    #--------------------------------------------------------
+    # Restore terminal before entering interactive shell
+    #--------------------------------------------------------
+
     if declare -F tui_restore >/dev/null 2>&1
     then
-        tui_restore || true
+        tui_restore \
+            || true
     fi
 
     printf '\n'
@@ -617,6 +563,10 @@ menu_main_shell()
     printf 'Returning to Arch Installer...\n'
 
     sleep 1
+
+    #--------------------------------------------------------
+    # Restore TUI
+    #--------------------------------------------------------
 
     if ! declare -F tui_start >/dev/null 2>&1
     then
@@ -643,24 +593,45 @@ menu_main_shell()
 
 menu_main_exit()
 {
-    if ! declare -F dialog_confirm >/dev/null 2>&1
+    if declare -F dialog_confirm >/dev/null 2>&1
     then
-        menu_main_log_warn \
-            "dialog_confirm() is not available"
+        if dialog_confirm \
+            "Exit Arch Installer?"
+        then
+            menu_main_log_info \
+                "User selected exit"
+
+            return 0
+        fi
 
         return 1
     fi
 
-    if dialog_confirm \
-        "Exit Arch Installer?"
-    then
-        menu_main_log_info \
-            "User selected exit"
+    #--------------------------------------------------------
+    # Fallback confirmation
+    #--------------------------------------------------------
 
-        return 0
-    fi
+    printf '\n'
+    printf 'Exit Arch Installer? [y/N] '
 
-    return 1
+    local answer
+
+    read -r answer </dev/tty \
+        || return 1
+
+    case "${answer,,}"
+    in
+        y|yes)
+            menu_main_log_info \
+                "User selected exit"
+
+            return 0
+            ;;
+
+        *)
+            return 1
+            ;;
+    esac
 }
 
 #============================================================
@@ -676,10 +647,41 @@ menu_main_draw()
     local box_height
     local i
     local row
+    local width
 
     box_height=$((item_count + 4))
 
-    menu_main_header || return 1
+    #--------------------------------------------------------
+    # Terminal dimensions
+    #--------------------------------------------------------
+
+    if [[ -z "${TUI_COLS:-}" ]]
+    then
+        TUI_COLS=80
+    fi
+
+    if [[ -z "${TUI_ROWS:-}" ]]
+    then
+        TUI_ROWS=24
+    fi
+
+    width=$((TUI_COLS - 10))
+
+    if (( width < 20 ))
+    then
+        width=20
+    fi
+
+    #--------------------------------------------------------
+    # Header
+    #--------------------------------------------------------
+
+    menu_main_header \
+        || return 1
+
+    #--------------------------------------------------------
+    # Menu box
+    #--------------------------------------------------------
 
     if ! declare -F draw_box >/dev/null 2>&1
     then
@@ -692,8 +694,13 @@ menu_main_draw()
     draw_box \
         6 \
         5 \
-        "$((TUI_COLS - 10))" \
-        "$box_height" || return 1
+        "$width" \
+        "$box_height" \
+        || return 1
+
+    #--------------------------------------------------------
+    # Items
+    #--------------------------------------------------------
 
     for i in "${!items_ref[@]}"
     do
@@ -704,7 +711,10 @@ menu_main_draw()
             break
         fi
 
-        tui_move "$row" 8 || return 1
+        tui_move \
+            "$row" \
+            8 \
+            || return 1
 
         if (( i == selected ))
         then
@@ -721,6 +731,10 @@ menu_main_draw()
                 "  ${items_ref[i]}"
         fi
     done
+
+    #--------------------------------------------------------
+    # Status bar
+    #--------------------------------------------------------
 
     if declare -F statusbar_draw >/dev/null 2>&1
     then
@@ -757,6 +771,24 @@ menu_main()
     local selected=0
     local item_count="${#items[@]}"
 
+    #--------------------------------------------------------
+    # Controller must already be loaded by install.sh
+    #--------------------------------------------------------
+
+    if ! menu_main_check_controller
+    then
+        menu_main_log_error \
+            "Installer controller is incomplete"
+
+        return 1
+    fi
+
+    MENU_MAIN_SELECTED=0
+
+    #--------------------------------------------------------
+    # Main loop
+    #--------------------------------------------------------
+
     while true
     do
         if ! menu_main_draw \
@@ -769,105 +801,168 @@ menu_main()
             return 1
         fi
 
-        event_read
+        #----------------------------------------------------
+        # Read keyboard event
+        #----------------------------------------------------
 
-        case "${TUI_EVENT:-}" in
+        if ! event_read
+        then
+            menu_main_log_error \
+                "event_read() failed"
+
+            return 1
+        fi
+
+        #----------------------------------------------------
+        # Process event
+        #----------------------------------------------------
+
+        case "${TUI_EVENT:-}"
+        in
 
             "$EVENT_UP")
+
                 if (( selected > 0 ))
                 then
                     selected=$((selected - 1))
                 else
                     selected=$((item_count - 1))
                 fi
+
                 ;;
 
             "$EVENT_DOWN")
+
                 if (( selected < item_count - 1 ))
                 then
                     selected=$((selected + 1))
                 else
                     selected=0
                 fi
+
                 ;;
 
             "$EVENT_HOME")
+
                 selected=0
+
                 ;;
 
             "$EVENT_END")
+
                 selected=$((item_count - 1))
+
                 ;;
 
             "$EVENT_SELECT")
 
-                case "$selected" in
+                case "$selected"
+                in
 
                     0)
-                        menu_main_install || \
+
+                        if ! menu_main_install
+                        then
                             menu_main_log_warn \
                                 "Full installation returned failure"
+                        fi
+
                         ;;
 
                     1)
-                        menu_main_partition || \
+
+                        if ! menu_main_partition
+                        then
                             menu_main_log_warn \
                                 "Partition operation failed"
+                        fi
+
                         ;;
 
                     2)
-                        menu_main_filesystem || \
+
+                        if ! menu_main_filesystem
+                        then
                             menu_main_log_warn \
                                 "Filesystem operation failed"
+                        fi
+
                         ;;
 
                     3)
-                        menu_main_mount || \
+
+                        if ! menu_main_mount
+                        then
                             menu_main_log_warn \
                                 "Mount operation failed"
+                        fi
+
                         ;;
 
                     4)
-                        menu_main_packages || \
+
+                        if ! menu_main_packages
+                        then
                             menu_main_log_warn \
                                 "Package operation failed"
+                        fi
+
                         ;;
 
                     5)
-                        menu_main_bootloader || \
+
+                        if ! menu_main_bootloader
+                        then
                             menu_main_log_warn \
                                 "Bootloader operation failed"
+                        fi
+
                         ;;
 
                     6)
-                        menu_main_system_info || \
+
+                        if ! menu_main_system_info
+                        then
                             menu_main_log_warn \
                                 "System information failed"
+                        fi
+
                         ;;
 
                     7)
-                        menu_main_shell || \
+
+                        if ! menu_main_shell
+                        then
                             menu_main_log_warn \
                                 "Installer shell failed"
+                        fi
+
                         ;;
 
                     8)
+
                         if menu_main_exit
                         then
                             return 0
                         fi
+
                         ;;
 
                 esac
+
                 ;;
 
             "$EVENT_BACK")
+
                 if menu_main_exit
                 then
                     return 0
                 fi
+
                 ;;
 
         esac
+
+        MENU_MAIN_SELECTED="$selected"
     done
 }

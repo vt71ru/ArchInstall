@@ -22,36 +22,6 @@
 #
 # Не выполняет установку напрямую.
 #
-# Архитектура загрузки:
-#
-#   install.sh
-#       │
-#       ├── logger.sh
-#       ├── config.sh
-#       ├── common.sh
-#       ├── tui.sh
-#       │
-#       ├── welcome.sh
-#       ├── keyboard.sh
-#       ├── locale.sh
-#       ├── locale_generate.sh
-#       ├── network.sh
-#       ├── mirrors.sh
-#       ├── disks.sh
-#       ├── partition.sh
-#       ├── filesystem.sh
-#       ├── mount.sh
-#       ├── packages.sh
-#       ├── users.sh
-#       ├── desktop.sh
-#       ├── services.sh
-#       ├── bootloader.sh
-#       ├── summary.sh
-#       │
-#       ├── installer.sh
-#       │
-#       └── menu_main.sh
-#
 #============================================================
 
 set -Eeuo pipefail
@@ -376,7 +346,7 @@ check_terminal()
         export TERM="linux"
     fi
 
-    if [[ "${TERM:-}" == "dumb" ]]
+    if [[ "${TERM}" == "dumb" ]]
     then
         die \
             "Unsupported terminal: TERM=dumb"
@@ -611,13 +581,43 @@ detect_partition_table()
 }
 
 #============================================================
+# Validate installer API
+#============================================================
+
+check_installer_api()
+{
+    local function_name
+
+    for function_name in \
+        installer_run \
+        installer_partition \
+        installer_filesystem \
+        installer_mount \
+        installer_packages \
+        installer_bootloader \
+        installer_get_stage \
+        installer_get_last_rc
+    do
+        if ! declare -F "$function_name" >/dev/null 2>&1
+        then
+            die \
+                "installer.sh API function unavailable: ${function_name}"
+
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+#============================================================
 # Load installer modules
 #============================================================
 
 load_installer_modules()
 {
     #--------------------------------------------------------
-    # Basic installation modules
+    # Basic modules
     #--------------------------------------------------------
 
     require_installer \
@@ -673,18 +673,22 @@ load_installer_modules()
         summary.sh
 
     #--------------------------------------------------------
-    # Central installer controller
+    # Central controller
     #
-    # MUST be loaded before menu_main.sh
+    # MUST be loaded before menu_main.sh.
     #--------------------------------------------------------
 
     require_installer \
         installer.sh
 
     #--------------------------------------------------------
-    # Main menu
-    #
-    # MUST be loaded last
+    # Verify controller before loading menu.
+    #--------------------------------------------------------
+
+    check_installer_api || return 1
+
+    #--------------------------------------------------------
+    # Main menu MUST be loaded last.
     #--------------------------------------------------------
 
     require_installer \
@@ -774,10 +778,6 @@ cleanup()
 
     INSTALLER_EXITING=1
 
-    #--------------------------------------------------------
-    # Restore TUI
-    #--------------------------------------------------------
-
     if (( TUI_READY ))
     then
         if declare -F tui_restore >/dev/null 2>&1
@@ -788,24 +788,12 @@ cleanup()
         TUI_READY=0
     fi
 
-    #--------------------------------------------------------
-    # Restore terminal
-    #--------------------------------------------------------
-
     if declare -F terminal_restore >/dev/null 2>&1
     then
         terminal_restore || true
     fi
 
-    #--------------------------------------------------------
-    # Close controlling terminal FD
-    #--------------------------------------------------------
-
     close_terminal_fd
-
-    #--------------------------------------------------------
-    # Close logger
-    #--------------------------------------------------------
 
     if (( LOGGER_READY ))
     then
@@ -916,7 +904,7 @@ trap on_sigterm TERM
 main()
 {
     #--------------------------------------------------------
-    # Bootstrap information
+    # Bootstrap
     #--------------------------------------------------------
 
     bootstrap_output \
@@ -1078,6 +1066,14 @@ main()
 
     bootstrap_output \
         "STEP 15: menu_main"
+
+    if ! declare -F menu_main >/dev/null 2>&1
+    then
+        die \
+            "menu_main() is not available"
+
+        return 1
+    fi
 
     if ! menu_main
     then

@@ -9,16 +9,13 @@
 #
 # Ответственность:
 #   • проверка окружения
-#   • инициализация logger
-#   • проверка зависимостей
-#   • проверка terminal
+#   • загрузка logger
 #   • загрузка core libraries
 #   • инициализация CONFIG
 #   • определение boot mode
 #   • определение partition table
 #   • загрузка installer modules
 #   • загрузка installer controller
-#   • загрузка main menu
 #   • запуск TUI
 #   • запуск main menu
 #   • корректное завершение
@@ -32,12 +29,6 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 umask 022
-
-#============================================================
-# Early bootstrap output
-#============================================================
-
-printf '%s\n' 'Arch Installer bootstrap starting...' >&2
 
 #============================================================
 # Application
@@ -66,29 +57,44 @@ INSTALLER_EXITING=0
 TUI_TTY_FD=""
 
 #============================================================
-# Logger module
+# Bootstrap output
+#============================================================
+
+bootstrap_output()
+{
+    local message="${1-}"
+
+    if [[ -w /dev/tty ]]
+    then
+        printf '%s\n' "$message" > /dev/tty
+    else
+        printf '%s\n' "$message" >&2
+    fi
+
+    return 0
+}
+
+#============================================================
+# Logger
 #============================================================
 
 readonly LOGGER_MODULE="${LIB_DIR}/logger.sh"
 
 if [[ ! -f "$LOGGER_MODULE" ]]
 then
-    printf 'ERROR: Missing logger module: %s\n' "$LOGGER_MODULE" >&2
+    bootstrap_output \
+        "ERROR: Missing logger module: ${LOGGER_MODULE}"
     exit 1
 fi
 
 export LOGGER_FILE="${LOGGER_FILE:-/tmp/arch-installer.log}"
 export LOGGER_LEVEL="${LOGGER_LEVEL:-INFO}"
 
-#------------------------------------------------------------
-# Load logger
-#------------------------------------------------------------
-
+# shellcheck disable=SC1090
 if ! source "$LOGGER_MODULE"
 then
-    printf 'ERROR: Failed to load logger module: %s\n' \
-        "$LOGGER_MODULE" \
-        >&2
+    bootstrap_output \
+        "ERROR: Cannot load logger: ${LOGGER_MODULE}"
     exit 1
 fi
 
@@ -105,28 +111,10 @@ die()
         logger_error "$message" || true
     fi
 
-    printf 'Error: %s\n' "$message" >&2
+    bootstrap_output \
+        "ERROR: ${message}"
 
     return 1
-}
-
-#============================================================
-# Bootstrap output
-#============================================================
-
-bootstrap_output()
-{
-    local message="${1-}"
-
-    if [[ -e /dev/tty ]]
-    then
-        if printf '%s\n' "$message" >/dev/tty 2>/dev/null
-        then
-            return 0
-        fi
-    fi
-
-    printf '%s\n' "$message" >&2
 }
 
 #============================================================
@@ -146,15 +134,9 @@ open_terminal_fd()
         return 1
     fi
 
-    if [[ ! -r /dev/tty ]]
+    if [[ ! -r /dev/tty || ! -w /dev/tty ]]
     then
-        die "/dev/tty is not readable"
-        return 1
-    fi
-
-    if [[ ! -w /dev/tty ]]
-    then
-        die "/dev/tty is not writable"
+        die "/dev/tty is not readable/writable"
         return 1
     fi
 
@@ -177,14 +159,19 @@ open_terminal_fd()
 
 close_terminal_fd()
 {
-    if [[ -n "${TUI_TTY_FD:-}" ]]
+    local fd="${TUI_TTY_FD:-}"
+
+    if [[ -n "$fd" ]]
     then
-        eval "exec ${TUI_TTY_FD}>&-" 2>/dev/null || true
-
-        TUI_TTY_FD=""
-
-        export TUI_TTY_FD
+        if [[ "$fd" =~ ^[0-9]+$ ]]
+        then
+            eval "exec ${fd}>&-" 2>/dev/null || true
+        fi
     fi
+
+    TUI_TTY_FD=""
+
+    export TUI_TTY_FD
 
     return 0
 }
@@ -206,9 +193,11 @@ load_module()
         lib)
             directory="$LIB_DIR"
             ;;
+
         installer)
             directory="$INSTALLER_DIR"
             ;;
+
         *)
             die "Unknown module type: ${kind}"
             return 1
@@ -238,6 +227,28 @@ load_module()
             "Loading ${kind} module: ${file}"
     fi
 
+    #--------------------------------------------------------
+    # Syntax check before source
+    #--------------------------------------------------------
+
+    if ! bash -n "$file"
+    then
+        bootstrap_output \
+            "SYNTAX ERROR in ${kind}: ${name}"
+
+        if declare -F logger_error >/dev/null 2>&1
+        then
+            logger_error \
+                "Syntax check failed: ${file}"
+        fi
+
+        return 1
+    fi
+
+    #--------------------------------------------------------
+    # Source module
+    #--------------------------------------------------------
+
     if source "$file"
     then
         bootstrap_output \
@@ -246,21 +257,21 @@ load_module()
         if declare -F logger_debug >/dev/null 2>&1
         then
             logger_debug \
-                "Successfully loaded ${kind} module: ${file}"
+                "Successfully loaded ${kind}: ${file}"
         fi
 
         return 0
-    else
-        rc=$?
     fi
 
+    rc=$?
+
     bootstrap_output \
-        "FAILED loading ${kind}: ${name}"
+        "FAILED loading ${kind}: ${name} (rc=${rc})"
 
     if declare -F logger_error >/dev/null 2>&1
     then
         logger_error \
-            "Failed to load ${kind} module: ${file} (rc=${rc})"
+            "Failed to load ${kind} module: ${file} rc=${rc}"
     fi
 
     return "$rc"
@@ -268,20 +279,28 @@ load_module()
 
 require_lib()
 {
-    local module="${1:-}"
+    if [[ $# -ne 1 ]]
+    then
+        die "require_lib(): module name is missing"
+        return 1
+    fi
 
     load_module \
         lib \
-        "$module"
+        "$1"
 }
 
 require_installer()
 {
-    local module="${1:-}"
+    if [[ $# -ne 1 ]]
+    then
+        die "require_installer(): module name is missing"
+        return 1
+    fi
 
     load_module \
         installer \
-        "$module"
+        "$1"
 }
 
 #============================================================
@@ -352,50 +371,6 @@ check_project_structure()
     return 0
 }
 
-check_dependencies()
-{
-    local required=(
-        bash
-        awk
-        sed
-        grep
-        lsblk
-        blkid
-        findmnt
-        mountpoint
-        tput
-        stty
-        base64
-        uname
-        sleep
-    )
-
-    local command_name
-
-    bootstrap_output \
-        "Checking dependencies..."
-
-    for command_name in "${required[@]}"
-    do
-        if ! command -v "$command_name" >/dev/null 2>&1
-        then
-            die "Missing program: ${command_name}"
-            return 1
-        fi
-    done
-
-    bootstrap_output \
-        "Dependencies: OK"
-
-    if declare -F logger_info >/dev/null 2>&1
-    then
-        logger_info \
-            "Bootstrap dependency check passed"
-    fi
-
-    return 0
-}
-
 check_terminal()
 {
     bootstrap_output \
@@ -407,15 +382,9 @@ check_terminal()
         return 1
     fi
 
-    if [[ ! -r /dev/tty ]]
+    if [[ ! -r /dev/tty || ! -w /dev/tty ]]
     then
-        die "/dev/tty is not readable"
-        return 1
-    fi
-
-    if [[ ! -w /dev/tty ]]
-    then
-        die "/dev/tty is not writable"
+        die "/dev/tty is not readable/writable"
         return 1
     fi
 
@@ -450,14 +419,56 @@ check_terminal()
         return 1
     fi
 
-    bootstrap_output \
-        "Terminal: OK"
-
     if declare -F logger_info >/dev/null 2>&1
     then
         logger_info \
             "Terminal check passed"
     fi
+
+    bootstrap_output \
+        "Terminal check: OK"
+
+    return 0
+}
+
+check_dependencies()
+{
+    local required=(
+        bash
+        awk
+        sed
+        grep
+        lsblk
+        blkid
+        findmnt
+        mountpoint
+        tput
+        stty
+        base64
+    )
+
+    local command_name
+
+    bootstrap_output \
+        "Checking dependencies..."
+
+    for command_name in "${required[@]}"
+    do
+        if ! command -v "$command_name" >/dev/null 2>&1
+        then
+            die "Missing program: ${command_name}"
+            return 1
+        fi
+    done
+
+    if declare -F logger_info >/dev/null 2>&1
+    then
+        logger_info \
+            "Bootstrap dependency check passed"
+    fi
+
+    bootstrap_output \
+        "Dependencies: OK"
 
     return 0
 }
@@ -475,20 +486,20 @@ load_core_libraries()
     require_lib common.sh || return 1
     require_lib tui.sh || return 1
 
-    bootstrap_output \
-        "Core libraries loaded"
-
     if declare -F logger_info >/dev/null 2>&1
     then
         logger_info \
             "Core libraries loaded"
     fi
 
+    bootstrap_output \
+        "Core libraries: OK"
+
     return 0
 }
 
 #============================================================
-# CONFIG API
+# Validate CONFIG API
 #============================================================
 
 check_config_api()
@@ -509,21 +520,14 @@ check_config_api()
     do
         if ! declare -F "$function_name" >/dev/null 2>&1
         then
-            bootstrap_output \
-                "MISSING CONFIG API: ${function_name}"
-
             die \
                 "config.sh API function unavailable: ${function_name}"
-
             return 1
         fi
 
         bootstrap_output \
-            "OK: ${function_name}"
+            "  CONFIG API: ${function_name}: OK"
     done
-
-    bootstrap_output \
-        "CONFIG API: OK"
 
     if declare -F logger_info >/dev/null 2>&1
     then
@@ -552,38 +556,33 @@ detect_boot_mode()
             || true
     )"
 
-    if [[ -n "$current" ]]
+    if [[ "$current" == "UEFI" || "$current" == "BIOS" ]]
     then
-        case "$current"
-        in
-            UEFI|BIOS)
-                bootstrap_output \
-                    "Boot mode from configuration: ${current}"
+        mode="$current"
 
-                logger_info \
-                    "Boot mode loaded from configuration: ${current}"
-
-                return 0
-                ;;
-        esac
-    fi
-
-    if [[ -d /sys/firmware/efi ]]
-    then
-        mode="UEFI"
+        bootstrap_output \
+            "Boot mode from configuration: ${mode}"
     else
-        mode="BIOS"
+        if [[ -d /sys/firmware/efi ]]
+        then
+            mode="UEFI"
+        else
+            mode="BIOS"
+        fi
+
+        config_set \
+            BOOT_MODE \
+            "$mode"
+
+        bootstrap_output \
+            "Boot mode detected: ${mode}"
     fi
 
-    config_set \
-        BOOT_MODE \
-        "$mode"
-
-    bootstrap_output \
-        "Boot mode detected: ${mode}"
-
-    logger_info \
-        "Boot mode detected: ${mode}"
+    if declare -F logger_info >/dev/null 2>&1
+    then
+        logger_info \
+            "Boot mode: ${mode}"
+    fi
 
     return 0
 }
@@ -607,56 +606,53 @@ detect_partition_table()
             || true
     )"
 
-    if [[ -n "$current" ]]
+    if [[ "$current" == "GPT" || "$current" == "MBR" ]]
     then
-        case "$current"
+        table="$current"
+
+        bootstrap_output \
+            "Partition table from configuration: ${table}"
+    else
+        boot_mode="$(
+            config_get BOOT_MODE
+        )"
+
+        case "$boot_mode"
         in
-            GPT|MBR)
-                bootstrap_output \
-                    "Partition table from configuration: ${current}"
+            UEFI)
+                table="GPT"
+                ;;
 
-                logger_info \
-                    "Partition table loaded from configuration: ${current}"
+            BIOS)
+                table="MBR"
+                ;;
 
-                return 0
+            *)
+                die \
+                    "Cannot determine partition table without valid boot mode"
+                return 1
                 ;;
         esac
+
+        config_set \
+            PARTITION_TABLE \
+            "$table"
+
+        bootstrap_output \
+            "Partition table selected: ${table}"
     fi
 
-    boot_mode="$(
-        config_get BOOT_MODE
-    )"
-
-    case "$boot_mode"
-    in
-        UEFI)
-            table="GPT"
-            ;;
-        BIOS)
-            table="MBR"
-            ;;
-        *)
-            die \
-                "Cannot determine partition table without valid boot mode"
-            return 1
-            ;;
-    esac
-
-    config_set \
-        PARTITION_TABLE \
-        "$table"
-
-    bootstrap_output \
-        "Partition table selected: ${table}"
-
-    logger_info \
-        "Partition table selected: ${table}"
+    if declare -F logger_info >/dev/null 2>&1
+    then
+        logger_info \
+            "Partition table: ${table}"
+    fi
 
     return 0
 }
 
 #============================================================
-# Installer controller API
+# Validate installer API
 #============================================================
 
 check_installer_api()
@@ -681,23 +677,23 @@ check_installer_api()
         if ! declare -F "$function_name" >/dev/null 2>&1
         then
             bootstrap_output \
-                "MISSING API: ${function_name}"
+                "  MISSING API: ${function_name}"
 
             die \
-                "installer.sh API function unavailable: ${function_name}"
+                "installer/installer.sh API function unavailable: ${function_name}"
 
             return 1
         fi
 
         bootstrap_output \
-            "OK: ${function_name}"
+            "  API ${function_name}: OK"
     done
 
-    bootstrap_output \
-        "Installer controller API: OK"
-
-    logger_info \
-        "Installer controller API check passed"
+    if declare -F logger_info >/dev/null 2>&1
+    then
+        logger_info \
+            "Installer controller API check passed"
+    fi
 
     return 0
 }
@@ -744,16 +740,11 @@ load_installer_modules()
     bootstrap_output \
         "Loading central controller: installer.sh"
 
-    require_installer installer.sh
-    then_rc=$?
-
-    if (( then_rc != 0 ))
-    then
+    require_installer installer.sh || {
         bootstrap_output \
             "ERROR: installer/installer.sh failed to load"
-
-        return "$then_rc"
-    fi
+        return 1
+    }
 
     bootstrap_output \
         "Central controller loaded successfully"
@@ -768,21 +759,26 @@ load_installer_modules()
     # Main menu
     #--------------------------------------------------------
 
+    bootstrap_output \
+        "Loading main menu: menu_main.sh"
+
     require_installer menu_main.sh || return 1
 
     if ! declare -F menu_main >/dev/null 2>&1
     then
         die \
             "menu_main() is not available after loading menu_main.sh"
-
         return 1
     fi
 
     bootstrap_output \
         "Main menu loaded successfully"
 
-    logger_info \
-        "Installer modules loaded"
+    if declare -F logger_info >/dev/null 2>&1
+    then
+        logger_info \
+            "Installer modules loaded"
+    fi
 
     return 0
 }
@@ -796,26 +792,35 @@ app_init()
     bootstrap_output \
         "Initializing TUI..."
 
-    logger_info \
-        "Initializing application"
+    if ! declare -F tui_init >/dev/null 2>&1
+    then
+        die "tui_init() is unavailable"
+        return 1
+    fi
 
     if ! tui_init
     then
-        logger_error \
-            "tui_init() failed"
-
+        die "tui_init() failed"
         return 1
     fi
 
     bootstrap_output \
-        "TUI initialized"
+        "Starting TUI..."
+
+    if ! declare -F tui_start >/dev/null 2>&1
+    then
+        die "tui_start() is unavailable"
+        return 1
+    fi
 
     if ! tui_start
     then
-        logger_error \
-            "tui_start() failed"
+        die "tui_start() failed"
 
-        tui_restore || true
+        if declare -F tui_restore >/dev/null 2>&1
+        then
+            tui_restore || true
+        fi
 
         return 1
     fi
@@ -834,11 +839,14 @@ app_init()
         tui_clear || true
     fi
 
-    bootstrap_output \
-        "Application initialized"
+    if declare -F logger_info >/dev/null 2>&1
+    then
+        logger_info \
+            "Application initialized"
+    fi
 
-    logger_info \
-        "Application initialized"
+    bootstrap_output \
+        "TUI initialized successfully"
 
     return 0
 }
@@ -849,22 +857,28 @@ app_init()
 
 draw_startup()
 {
-    if declare -F tui_clear >/dev/null 2>&1
+    if ! declare -F tui_clear >/dev/null 2>&1
     then
-        tui_clear || return 1
+        die "tui_clear() is unavailable"
+        return 1
     fi
 
-    if declare -F titlebar_draw >/dev/null 2>&1
+    tui_clear || return 1
+
+    if ! declare -F titlebar_draw >/dev/null 2>&1
     then
-        titlebar_draw \
-            "$APP_NAME" \
-            || return 1
+        die "titlebar_draw() is unavailable"
+        return 1
     fi
+
+    titlebar_draw \
+        "$APP_NAME" \
+        || return 1
 
     if declare -F statusbar_draw >/dev/null 2>&1
     then
         statusbar_draw \
-            "F1 Help   Up/Down Navigate   Enter Select   Esc Exit" \
+            "F1 Help   ↑↓ Navigate   Enter Select   Esc Exit" \
             || return 1
     fi
 
@@ -886,6 +900,10 @@ cleanup()
 
     INSTALLER_EXITING=1
 
+    #--------------------------------------------------------
+    # Restore TUI
+    #--------------------------------------------------------
+
     if (( TUI_READY ))
     then
         if declare -F tui_restore >/dev/null 2>&1
@@ -896,12 +914,24 @@ cleanup()
         TUI_READY=0
     fi
 
+    #--------------------------------------------------------
+    # Restore terminal
+    #--------------------------------------------------------
+
     if declare -F terminal_restore >/dev/null 2>&1
     then
         terminal_restore || true
     fi
 
+    #--------------------------------------------------------
+    # Close controlling terminal
+    #--------------------------------------------------------
+
     close_terminal_fd
+
+    #--------------------------------------------------------
+    # Close logger
+    #--------------------------------------------------------
 
     if (( LOGGER_READY ))
     then
@@ -932,28 +962,35 @@ on_error()
         return "$code"
     fi
 
-    printf '\n' >&2
-    printf '%s\n' '========================================' >&2
-    printf '%s\n' ' FATAL ERROR' >&2
-    printf '%s\n' '========================================' >&2
+    bootstrap_output \
+        ""
 
-    printf 'Exit code : %s\n' \
-        "$code" \
-        >&2
+    bootstrap_output \
+        "========================================"
 
-    printf 'File      : %s\n' \
-        "$source_file" \
-        >&2
+    bootstrap_output \
+        "FATAL ERROR"
 
-    printf 'Line      : %s\n' \
-        "$line" \
-        >&2
+    bootstrap_output \
+        "========================================"
 
-    printf 'Function  : %s\n' \
-        "$function" \
-        >&2
+    bootstrap_output \
+        "Exit code : ${code}"
 
-    printf '%s\n' '========================================' >&2
+    bootstrap_output \
+        "File      : ${source_file}"
+
+    bootstrap_output \
+        "Line      : ${line}"
+
+    bootstrap_output \
+        "Function  : ${function}"
+
+    bootstrap_output \
+        "Log       : ${LOGGER_FILE:-/tmp/arch-installer.log}"
+
+    bootstrap_output \
+        "========================================"
 
     if declare -F logger_error >/dev/null 2>&1
     then
@@ -1000,7 +1037,7 @@ on_sigterm()
 trap cleanup EXIT
 
 trap \
-    'rc=$?; on_error "$rc" "$LINENO" "${BASH_SOURCE[0]}" "${FUNCNAME[1]:-main}"' \
+    'rc=$?; on_error "$rc" "$LINENO" "${BASH_SOURCE[0]}" "${FUNCNAME[1]:-main}"; exit "$rc"' \
     ERR
 
 trap on_sigint INT
@@ -1018,6 +1055,9 @@ main()
     bootstrap_output \
         "Project root: ${ROOT_DIR}"
 
+    bootstrap_output \
+        ""
+
     #--------------------------------------------------------
     # STEP 1
     #--------------------------------------------------------
@@ -1027,7 +1067,8 @@ main()
 
     if ! logger_init
     then
-        printf 'Failed to initialize logger\n' >&2
+        bootstrap_output \
+            "ERROR: Failed to initialize logger"
         return 1
     fi
 
@@ -1071,18 +1112,18 @@ main()
     #--------------------------------------------------------
 
     bootstrap_output \
-        "STEP 5: check_dependencies"
+        "STEP 5: check_terminal"
 
-    check_dependencies || return 1
+    check_terminal || return 1
 
     #--------------------------------------------------------
     # STEP 6
     #--------------------------------------------------------
 
     bootstrap_output \
-        "STEP 6: check_terminal"
+        "STEP 6: check_dependencies"
 
-    check_terminal || return 1
+    check_dependencies || return 1
 
     #--------------------------------------------------------
     # STEP 7
@@ -1173,16 +1214,19 @@ main()
     then
         die \
             "menu_main() is not available"
-
         return 1
     fi
 
-    if ! menu_main
+    if menu_main
     then
-        logger_error \
-            "Main menu returned with error"
+        :
+    else
+        local rc=$?
 
-        return 1
+        logger_error \
+            "Main menu returned with error: ${rc}"
+
+        return "$rc"
     fi
 
     #--------------------------------------------------------
@@ -1203,3 +1247,4 @@ main()
 #============================================================
 
 main "$@"
+exit $?

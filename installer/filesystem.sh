@@ -158,6 +158,8 @@ filesystem_load_config()
 
     logger_info \
         "Swap type: ${swap_type}"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -226,6 +228,8 @@ filesystem_check_tools()
             return 1
         }
     fi
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -268,6 +272,8 @@ filesystem_format_efi()
 
     logger_info \
         "EFI partition formatted successfully"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -316,6 +322,8 @@ filesystem_format_root()
 
     logger_info \
         "Root filesystem formatted successfully"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -379,6 +387,8 @@ filesystem_format_home()
 
     logger_info \
         "Home filesystem formatted successfully"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -421,6 +431,8 @@ filesystem_format_swap()
 
     logger_info \
         "Swap partition formatted successfully"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -429,14 +441,18 @@ filesystem_format_swap()
 
 filesystem_detect_type()
 {
-    local device="$1"
+    local device="${1:-}"
+
+    if [[ -z "$device" ]]
+    then
+        return 1
+    fi
 
     blkid \
         -s TYPE \
         -o value \
         "$device" \
-        2>/dev/null \
-        || true
+        2>/dev/null
 }
 
 #------------------------------------------------------------
@@ -473,6 +489,8 @@ filesystem_check_efi()
 
     logger_info \
         "EFI filesystem check passed"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -503,6 +521,8 @@ filesystem_check_root()
 
     logger_info \
         "Root filesystem check passed"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -541,6 +561,8 @@ filesystem_check_home()
 
     logger_info \
         "Home filesystem check passed"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -577,6 +599,8 @@ filesystem_check_swap()
 
     logger_info \
         "Swap filesystem check passed"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -599,6 +623,8 @@ filesystem_check()
 
     logger_info \
         "Filesystem validation passed"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -607,10 +633,18 @@ filesystem_check()
 
 filesystem_save()
 {
-    config_save
+    if ! config_save
+    then
+        logger_error \
+            "Failed to save filesystem configuration"
+
+        return 1
+    fi
 
     logger_info \
         "Filesystem state saved"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -652,4 +686,6 @@ filesystem()
 
     logger_info \
         "Filesystem formatting finished"
+
+    return 0
 }

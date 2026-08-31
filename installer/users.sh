@@ -12,14 +12,12 @@
 #   • Создание основного пользователя
 #   • Добавление пользователя в wheel
 #   • Настройка sudo
-#   • Установка пароля root
-#   • Установка пароля пользователя
+#   • Установка паролей
 #   • Проверка результата
 #
 #  Пароли:
 #   • Никогда не сохраняются в CONFIG
 #   • Никогда не записываются в лог
-#
 #============================================================
 
 #============================================================
@@ -31,54 +29,13 @@ then
     return 0 2>/dev/null || exit 0
 fi
 
-USERS_SH_LOADED=1
-export USERS_SH_LOADED
+readonly USERS_SH_LOADED=1
 
 #============================================================
 # Configuration
 #============================================================
 
-readonly USERS_DEFAULT_NAME="user"
-
-#============================================================
-# Logging helpers
-#============================================================
-
-users_log_info()
-{
-    if declare -F logger_info >/dev/null 2>&1
-    then
-        logger_info "$@" || true
-    else
-        printf '[INFO] %s\n' "${1:-}"
-    fi
-
-    return 0
-}
-
-users_log_warn()
-{
-    if declare -F logger_warn >/dev/null 2>&1
-    then
-        logger_warn "$@" || true
-    else
-        printf '[WARN] %s\n' "${1:-}" >&2
-    fi
-
-    return 0
-}
-
-users_log_error()
-{
-    if declare -F logger_error >/dev/null 2>&1
-    then
-        logger_error "$@" || true
-    else
-        printf '[ERROR] %s\n' "${1:-}" >&2
-    fi
-
-    return 0
-}
+USERS_DEFAULT_NAME="user"
 
 #============================================================
 # Load configuration
@@ -88,39 +45,25 @@ users_load_config()
 {
     local user_name=""
 
-    if ! declare -F config_get >/dev/null 2>&1
-    then
-        users_log_error \
-            "config_get() is not available"
-
-        return 1
-    fi
-
     if [[ -v "CONFIG[USER_NAME]" ]]
     then
-        user_name="$(
-            config_get USER_NAME \
-                2>/dev/null \
-                || true
-        )
+        user_name="$(config_get USER_NAME 2>/dev/null || true)"
     fi
 
     if [[ -z "$user_name" ]]
     then
         user_name="$USERS_DEFAULT_NAME"
 
-        if ! config_set \
-            USER_NAME \
-            "$user_name"
+        if ! config_set USER_NAME "$user_name"
         then
-            users_log_error \
+            logger_error \
                 "Failed to set default USER_NAME"
 
             return 1
         fi
     fi
 
-    users_log_info \
+    logger_info \
         "User configuration loaded: ${user_name}"
 
     return 0
@@ -132,25 +75,17 @@ users_load_config()
 
 users_check_target()
 {
-    if [[ ! -d /mnt ]]
-    then
-        users_log_error \
-            "Target mountpoint /mnt does not exist"
-
-        return 1
-    fi
-
     if [[ ! -d /mnt/etc ]]
     then
-        users_log_error \
-            "Target /etc directory is missing"
+        dialog_error \
+            "Target system is not installed"
 
         return 1
     fi
 
     if [[ ! -f /mnt/etc/passwd ]]
     then
-        users_log_error \
+        dialog_error \
             "Target /etc/passwd is missing"
 
         return 1
@@ -158,7 +93,7 @@ users_check_target()
 
     if [[ ! -f /mnt/etc/shadow ]]
     then
-        users_log_error \
+        dialog_error \
             "Target /etc/shadow is missing"
 
         return 1
@@ -166,87 +101,65 @@ users_check_target()
 
     if [[ ! -x /mnt/usr/bin/bash ]]
     then
-        users_log_error \
-            "Target /usr/bin/bash is missing"
+        dialog_error \
+            "Target Bash is missing"
 
         return 1
     fi
 
-    if [[ ! -x /mnt/usr/bin/useradd ]]
-    then
-        users_log_error \
-            "Target /usr/bin/useradd is missing"
-
-        return 1
-    fi
-
-    if [[ ! -x /mnt/usr/bin/usermod ]]
-    then
-        users_log_error \
-            "Target /usr/bin/usermod is missing"
-
-        return 1
-    fi
-
-    users_log_info \
-        "Target system is ready for user configuration"
+    logger_info \
+        "Target user database detected"
 
     return 0
 }
 
 #============================================================
-# Check required host tools
+# Check required tools
 #============================================================
 
-users_check_host_tools()
+users_check_tools()
 {
     local required=(
         arch-chroot
         passwd
     )
 
-    local command_name
+    local cmd
 
-    for command_name in "${required[@]}"
+    for cmd in "${required[@]}"
     do
-        if ! command -v "$command_name" >/dev/null 2>&1
+        if ! command -v "$cmd" >/dev/null 2>&1
         then
-            users_log_error \
-                "Required host program not found: ${command_name}"
+            dialog_error \
+                "Required program not found: ${cmd}"
 
             return 1
         fi
     done
 
-    return 0
-}
+    if ! arch-chroot /mnt command -v useradd >/dev/null 2>&1
+    then
+        dialog_error \
+            "useradd is missing in target system"
 
-#============================================================
-# Check target tools
-#============================================================
+        return 1
+    fi
 
-users_check_target_tools()
-{
-    local required=(
-        /usr/bin/useradd
-        /usr/bin/usermod
-        /usr/bin/groupadd
-        /usr/bin/getent
-        /usr/bin/id
-    )
+    if ! arch-chroot /mnt command -v usermod >/dev/null 2>&1
+    then
+        dialog_error \
+            "usermod is missing in target system"
 
-    local tool
+        return 1
+    fi
 
-    for tool in "${required[@]}"
-    do
-        if [[ ! -x "/mnt${tool}" ]]
-        then
-            users_log_error \
-                "Required target program is missing: ${tool}"
+    if ! arch-chroot /mnt command -v groupadd >/dev/null 2>&1
+    then
+        dialog_error \
+            "groupadd is missing in target system"
 
-            return 1
-        fi
-    done
+        return 1
+    fi
 
     return 0
 }
@@ -259,15 +172,11 @@ users_validate_name()
 {
     local user_name=""
 
-    user_name="$(
-        config_get USER_NAME \
-            2>/dev/null \
-            || true
-    )"
+    user_name="$(config_get USER_NAME 2>/dev/null || true)"
 
     if [[ -z "$user_name" ]]
     then
-        users_log_error \
+        dialog_error \
             "User name is empty"
 
         return 1
@@ -275,7 +184,7 @@ users_validate_name()
 
     if (( ${#user_name} > 32 ))
     then
-        users_log_error \
+        dialog_error \
             "User name is too long"
 
         return 1
@@ -283,7 +192,7 @@ users_validate_name()
 
     if [[ ! "$user_name" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]
     then
-        users_log_error \
+        dialog_error \
             "Invalid user name: ${user_name}"
 
         return 1
@@ -291,7 +200,7 @@ users_validate_name()
 
     if [[ "$user_name" == "root" ]]
     then
-        users_log_error \
+        dialog_error \
             "root cannot be used as normal user"
 
         return 1
@@ -308,18 +217,13 @@ users_exists()
 {
     local user_name=""
 
-    user_name="$(
-        config_get USER_NAME \
-            2>/dev/null \
-            || true
-    )"
+    user_name="$(config_get USER_NAME 2>/dev/null || true)"
 
     [[ -n "$user_name" ]] || return 1
 
     arch-chroot \
         /mnt \
-        getent \
-        passwd \
+        getent passwd \
         "$user_name" \
         >/dev/null 2>&1
 }
@@ -332,45 +236,33 @@ users_create()
 {
     local user_name=""
 
-    user_name="$(
-        config_get USER_NAME \
-            2>/dev/null \
-            || true
-    )"
-
-    if [[ -z "$user_name" ]]
-    then
-        users_log_error \
-            "Cannot create user: USER_NAME is empty"
-
-        return 1
-    fi
+    user_name="$(config_get USER_NAME)"
 
     if users_exists
     then
-        users_log_info \
+        logger_info \
             "User already exists: ${user_name}"
 
         return 0
     fi
 
-    users_log_info \
+    logger_info \
         "Creating user: ${user_name}"
 
     if ! arch-chroot \
         /mnt \
         useradd \
-        --create-home \
-        --shell /bin/bash \
+        -m \
+        -s /bin/bash \
         "$user_name"
     then
-        users_log_error \
+        logger_error \
             "Failed creating user: ${user_name}"
 
         return 1
     fi
 
-    users_log_info \
+    logger_info \
         "User created: ${user_name}"
 
     return 0
@@ -384,15 +276,13 @@ users_ensure_wheel()
 {
     if arch-chroot \
         /mnt \
-        getent \
-        group \
-        wheel \
+        getent group wheel \
         >/dev/null 2>&1
     then
         return 0
     fi
 
-    users_log_info \
+    logger_info \
         "Creating wheel group"
 
     if ! arch-chroot \
@@ -400,7 +290,7 @@ users_ensure_wheel()
         groupadd \
         wheel
     then
-        users_log_error \
+        logger_error \
             "Failed creating wheel group"
 
         return 1
@@ -417,60 +307,26 @@ users_add_wheel()
 {
     local user_name=""
 
-    user_name="$(
-        config_get USER_NAME \
-            2>/dev/null \
-            || true
-    )"
-
-    if [[ -z "$user_name" ]]
-    then
-        users_log_error \
-            "Cannot add user to wheel: USER_NAME is empty"
-
-        return 1
-    fi
+    user_name="$(config_get USER_NAME)"
 
     users_ensure_wheel || return 1
 
-    users_log_info \
+    logger_info \
         "Adding ${user_name} to wheel"
 
     if ! arch-chroot \
         /mnt \
         usermod \
-        --append \
-        --groups wheel \
+        -aG wheel \
         "$user_name"
     then
-        users_log_error \
+        logger_error \
             "Failed adding ${user_name} to wheel"
 
         return 1
     fi
 
     return 0
-}
-
-#============================================================
-# Detect sudo implementation
-#============================================================
-
-users_detect_sudo()
-{
-    if [[ -x /mnt/usr/bin/sudo ]]
-    then
-        printf '%s\n' sudo
-        return 0
-    fi
-
-    if [[ -x /mnt/usr/bin/sudo-rs ]]
-    then
-        printf '%s\n' sudo-rs
-        return 0
-    fi
-
-    return 1
 }
 
 #============================================================
@@ -481,81 +337,62 @@ users_configure_sudo()
 {
     local sudoers_dir="/mnt/etc/sudoers.d"
     local sudoers_file="${sudoers_dir}/10-wheel"
-    local sudo_command=""
 
-    sudo_command="$(
-        users_detect_sudo \
-            2>/dev/null \
-            || true
-    )"
+    #--------------------------------------------------------
+    # Check sudo
+    #--------------------------------------------------------
 
-    if [[ -z "$sudo_command" ]]
+    if [[ ! -x /mnt/usr/bin/sudo &&
+          ! -x /mnt/usr/bin/sudo-rs ]]
     then
-        users_log_error \
+        dialog_error \
             "sudo is not installed in target system"
-
-        users_log_error \
-            "Expected /usr/bin/sudo or /usr/bin/sudo-rs"
 
         return 1
     fi
 
-    users_log_info \
-        "Detected sudo implementation: ${sudo_command}"
+    #--------------------------------------------------------
+    # Check sudoers directory
+    #--------------------------------------------------------
 
-    if ! mkdir -p \
-        "$sudoers_dir"
+    if ! mkdir -p "$sudoers_dir"
     then
-        users_log_error \
+        logger_error \
             "Failed creating ${sudoers_dir}"
 
         return 1
     fi
 
     #--------------------------------------------------------
-    # Write wheel rule.
-    #
-    # This is valid for both sudo and sudo-rs.
+    # Create wheel rule
     #--------------------------------------------------------
 
     if ! printf '%s\n' \
         '%wheel ALL=(ALL:ALL) ALL' \
         > "$sudoers_file"
     then
-        users_log_error \
+        logger_error \
             "Failed writing ${sudoers_file}"
 
         return 1
     fi
 
-    if ! chmod 440 \
-        "$sudoers_file"
-    then
-        users_log_error \
+    chmod 440 "$sudoers_file" || {
+        logger_error \
             "Failed setting permissions on ${sudoers_file}"
 
-        rm -f "$sudoers_file"
+        return 1
+    }
+
+    chown root:root "$sudoers_file" || {
+        logger_error \
+            "Failed setting ownership on ${sudoers_file}"
 
         return 1
-    fi
-
-    if ! chown root:root \
-        "$sudoers_file"
-    then
-        users_log_error \
-            "Failed setting owner on ${sudoers_file}"
-
-        rm -f "$sudoers_file"
-
-        return 1
-    fi
+    }
 
     #--------------------------------------------------------
-    # Validate sudo configuration if validator exists.
-    #
-    # Do not require visudo to exist. Some target setups
-    # may provide sudo functionality without the traditional
-    # validator path.
+    # Validate sudoers
     #--------------------------------------------------------
 
     if [[ -x /mnt/usr/bin/visudo ]]
@@ -566,10 +403,10 @@ users_configure_sudo()
             -cf \
             /etc/sudoers
         then
-            users_log_error \
-                "sudoers validation failed"
-
             rm -f "$sudoers_file"
+
+            logger_error \
+                "sudoers validation failed"
 
             return 1
         fi
@@ -582,20 +419,24 @@ users_configure_sudo()
             -cf \
             /etc/sudoers
         then
-            users_log_error \
-                "sudo-rs configuration validation failed"
-
             rm -f "$sudoers_file"
+
+            logger_error \
+                "sudoers validation failed"
 
             return 1
         fi
 
     else
-        users_log_warn \
-            "No visudo validator found; sudoers file was created"
+        logger_error \
+            "Neither visudo nor visudo-rs exists in target system"
+
+        rm -f "$sudoers_file"
+
+        return 1
     fi
 
-    users_log_info \
+    logger_info \
         "wheel sudo access configured"
 
     return 0
@@ -607,19 +448,17 @@ users_configure_sudo()
 
 users_set_root_password()
 {
-    printf '\n'
-    printf '%s\n' \
-        "Set root password for installed system."
-    printf '\n'
-
-    users_log_info \
+    logger_info \
         "Setting root password"
+
+    printf '\n%s\n' \
+        "Set root password for installed system."
 
     if ! arch-chroot \
         /mnt \
         passwd
     then
-        users_log_error \
+        logger_error \
             "Failed setting root password"
 
         return 1
@@ -636,34 +475,20 @@ users_set_user_password()
 {
     local user_name=""
 
-    user_name="$(
-        config_get USER_NAME \
-            2>/dev/null \
-            || true
-    )"
+    user_name="$(config_get USER_NAME)"
 
-    if [[ -z "$user_name" ]]
-    then
-        users_log_error \
-            "Cannot set password: USER_NAME is empty"
-
-        return 1
-    fi
-
-    printf '\n'
-    printf '%s\n' \
-        "Set password for user ${user_name}."
-    printf '\n'
-
-    users_log_info \
+    logger_info \
         "Setting password for user: ${user_name}"
+
+    printf '\n%s\n' \
+        "Set password for user ${user_name}."
 
     if ! arch-chroot \
         /mnt \
         passwd \
         "$user_name"
     then
-        users_log_error \
+        logger_error \
             "Failed setting user password"
 
         return 1
@@ -682,19 +507,7 @@ users_check_result()
     local shell=""
     local groups=""
 
-    user_name="$(
-        config_get USER_NAME \
-            2>/dev/null \
-            || true
-    )"
-
-    if [[ -z "$user_name" ]]
-    then
-        users_log_error \
-            "USER_NAME is empty during verification"
-
-        return 1
-    fi
+    user_name="$(config_get USER_NAME)"
 
     #--------------------------------------------------------
     # User exists
@@ -702,7 +515,7 @@ users_check_result()
 
     if ! users_exists
     then
-        users_log_error \
+        dialog_error \
             "User was not created: ${user_name}"
 
         return 1
@@ -715,22 +528,21 @@ users_check_result()
     shell="$(
         arch-chroot \
             /mnt \
-            getent \
-            passwd \
+            getent passwd \
             "$user_name" |
         awk -F: '{print $7}'
     )"
 
     if [[ "$shell" != "/bin/bash" ]]
     then
-        users_log_error \
-            "Unexpected login shell for ${user_name}: ${shell}"
+        dialog_error \
+            "Unexpected login shell: ${shell}"
 
         return 1
     fi
 
     #--------------------------------------------------------
-    # Check wheel membership
+    # Check wheel
     #--------------------------------------------------------
 
     groups="$(
@@ -738,34 +550,32 @@ users_check_result()
             /mnt \
             id \
             -nG \
-            "$user_name" \
-            2>/dev/null \
-            || true
+            "$user_name"
     )"
 
     if ! grep -Eq \
         '(^|[[:space:]])wheel($|[[:space:]])' \
         <<< "$groups"
     then
-        users_log_error \
+        dialog_error \
             "User ${user_name} is not a member of wheel"
 
         return 1
     fi
 
     #--------------------------------------------------------
-    # Check sudo configuration
+    # Check sudoers
     #--------------------------------------------------------
 
     if [[ ! -f /mnt/etc/sudoers.d/10-wheel ]]
     then
-        users_log_error \
+        dialog_error \
             "sudo wheel configuration is missing"
 
         return 1
     fi
 
-    users_log_info \
+    logger_info \
         "User verification passed"
 
     return 0
@@ -777,170 +587,75 @@ users_check_result()
 
 users_save()
 {
-    if ! declare -F config_save >/dev/null 2>&1
-    then
-        users_log_warn \
-            "config_save() is not available"
-
-        return 0
-    fi
-
     if ! config_save
     then
-        users_log_error \
-            "Failed saving user configuration"
+        logger_error \
+            "Failed to save user configuration"
 
         return 1
     fi
 
-    users_log_info \
+    logger_info \
         "User configuration saved"
 
     return 0
 }
 
 #============================================================
-# Main
+# Main installer entry point
+#
+# IMPORTANT:
+# installer.sh expects:
+#
+#     users_configure
+#
 #============================================================
 
-users()
+users_configure()
 {
-    users_log_info \
-        "=========================================="
-
-    users_log_info \
+    logger_info \
         "User configuration started"
 
-    users_log_info \
-        "=========================================="
+    users_check_target || return 1
 
-    #--------------------------------------------------------
-    # Target
-    #--------------------------------------------------------
+    users_check_tools || return 1
 
-    if ! users_check_target
-    then
-        return 1
-    fi
+    users_load_config || return 1
 
-    #--------------------------------------------------------
-    # Host tools
-    #--------------------------------------------------------
+    users_validate_name || return 1
 
-    if ! users_check_host_tools
-    then
-        return 1
-    fi
+    users_create || return 1
 
-    #--------------------------------------------------------
-    # Target tools
-    #--------------------------------------------------------
+    users_add_wheel || return 1
 
-    if ! users_check_target_tools
-    then
-        return 1
-    fi
+    users_configure_sudo || return 1
 
-    #--------------------------------------------------------
-    # Configuration
-    #--------------------------------------------------------
+    users_set_root_password || return 1
 
-    if ! users_load_config
-    then
-        return 1
-    fi
+    users_set_user_password || return 1
 
-    if ! users_validate_name
-    then
-        return 1
-    fi
+    users_check_result || return 1
 
-    #--------------------------------------------------------
-    # Create user
-    #--------------------------------------------------------
-
-    if ! users_create
-    then
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Wheel
-    #--------------------------------------------------------
-
-    if ! users_add_wheel
-    then
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Sudo
-    #--------------------------------------------------------
-
-    if ! users_configure_sudo
-    then
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Passwords
-    #
-    # These are intentionally interactive.
-    # Passwords never enter CONFIG or logs.
-    #--------------------------------------------------------
-
-    if ! users_set_root_password
-    then
-        return 1
-    fi
-
-    if ! users_set_user_password
-    then
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Verification
-    #--------------------------------------------------------
-
-    if ! users_check_result
-    then
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Save
-    #--------------------------------------------------------
-
-    if ! users_save
-    then
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Success
-    #--------------------------------------------------------
+    users_save || return 1
 
     if declare -F dialog_message >/dev/null 2>&1
     then
         dialog_message \
             "Users" \
-            "User configuration completed successfully" \
-            || true
+            "User configuration completed successfully"
     fi
 
-    users_log_info \
-        "=========================================="
-
-    users_log_info \
-        "User configuration finished successfully"
-
-    users_log_info \
-        "=========================================="
+    logger_info \
+        "User configuration finished"
 
     return 0
 }
 
 #============================================================
-# End
+# Compatibility entry point
 #============================================================
+
+users()
+{
+    users_configure "$@"
+}

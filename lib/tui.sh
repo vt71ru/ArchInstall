@@ -822,15 +822,16 @@ tui_restore_cursor()
 # Colors
 #============================================================
 
+
 tui_color()
 {
     local code="${1:-}"
     local text="${2-}"
 
-    if [[ ! "$code" =~ ^[0-9;]+$ ]]
+    if [[ -z "$code" ]]
     then
         tui_log_error \
-            "TUI: invalid color code: $code"
+            "TUI: empty color code"
 
         return 1
     fi
@@ -840,10 +841,12 @@ tui_color()
         tui_printf \
             '\033[%sm%s\033[0m' \
             "$code" \
-            "$text"
+            "$text" || return 1
     else
-        tui_print "$text"
+        tui_print "$text" || return 1
     fi
+
+    return 0
 }
 
 color_error()

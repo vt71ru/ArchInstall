@@ -1,23 +1,20 @@
 #!/usr/bin/env bash
 #
 #============================================================
-#  Arch Installer
+# Arch Installer
 #------------------------------------------------------------
-#  locale.sh
+# installer/locale.sh
 #
-#  Выбор локалей системы.
+# Выбор локалей системы.
 #
-#  Ответственность:
-#   • Чтение /etc/locale.gen Live ISO
-#   • Выбор одной или нескольких локалей
-#   • Выбор LANG
-#   • Сохранение LOCALES и LOCALE
-#   • Возврат управления controller после выбора
+# Ответственность:
+#   • чтение /etc/locale.gen
+#   • выбор одной или нескольких UTF-8 локалей
+#   • выбор LANG
+#   • сохранение LOCALES
+#   • сохранение LOCALE
 #
-#  Генерация локалей выполняется locale_generate.sh.
-#
-#  Не изменяет /etc/locale.gen.
-#
+# Генерация локалей выполняется locale_generate.sh.
 #============================================================
 
 if [[ -n "${LOCALE_SH_LOADED:-}" ]]
@@ -34,45 +31,12 @@ readonly LOCALE_SH_LOADED=1
 declare -ga LOCALE_LIST=()
 declare -gA LOCALE_ENABLED=()
 
-LOCALE_SELECTED=0
-LOCALE_OFFSET=0
-LOCALE_DEFAULT_SELECTED=""
+declare -gi LOCALE_SELECTED=0
+declare -gi LOCALE_OFFSET=0
+
+declare -g LOCALE_DEFAULT_SELECTED=""
 
 readonly LOCALE_VISIBLE=12
-
-#============================================================
-# Logging
-#============================================================
-
-locale_log_info()
-{
-    if declare -F logger_info >/dev/null 2>&1
-    then
-        logger_info "$@"
-    fi
-
-    return 0
-}
-
-locale_log_warn()
-{
-    if declare -F logger_warn >/dev/null 2>&1
-    then
-        logger_warn "$@"
-    fi
-
-    return 0
-}
-
-locale_log_error()
-{
-    if declare -F logger_error >/dev/null 2>&1
-    then
-        logger_error "$@"
-    fi
-
-    return 0
-}
 
 #============================================================
 # Load locales
@@ -89,14 +53,7 @@ locale_load()
 
     if [[ ! -f "$file" ]]
     then
-        if declare -F dialog_error >/dev/null 2>&1
-        then
-            dialog_error \
-                "Locale" \
-                "Missing locale.gen: ${file}"
-        fi
-
-        locale_log_error \
+        dialog_error \
             "Missing locale.gen: ${file}"
 
         return 1
@@ -104,64 +61,32 @@ locale_load()
 
     while IFS= read -r line || [[ -n "$line" ]]
     do
-        #----------------------------------------------------
-        # Remove leading whitespace
-        #----------------------------------------------------
-
         line="${line#"${line%%[![:space:]]*}"}"
 
         [[ -z "$line" ]] && continue
 
-        #----------------------------------------------------
-        # Ignore comments that are not locale definitions.
-        #
-        # Accept both:
-        #
-        #   en_US.UTF-8 UTF-8
-        #
-        # and:
-        #
-        #   #en_US.UTF-8 UTF-8
-        #----------------------------------------------------
-
+        # Ignore comments which are not locale definitions.
         if [[ "$line" == \#* ]]
         then
             line="${line#\#}"
-
             line="${line#"${line%%[![:space:]]*}"}"
         fi
 
-        [[ -z "$line" ]] && continue
-
-        #----------------------------------------------------
-        # First whitespace-separated field
-        #----------------------------------------------------
+        # Ignore malformed lines.
+        [[ "$line" == \#* ]] && continue
 
         locale_name="${line%%[[:space:]]*}"
 
-        [[ -z "$locale_name" ]] && continue
+        [[ -n "$locale_name" ]] || continue
 
-        #----------------------------------------------------
-        # Only UTF-8 locales
-        #----------------------------------------------------
+        # Only UTF-8 locales.
+        [[ "$locale_name" == *.UTF-8 ]] || continue
 
-        if [[ "$locale_name" != *.UTF-8 ]]
-        then
-            continue
-        fi
-
-        #----------------------------------------------------
-        # The locale.gen line must explicitly specify UTF-8.
-        #----------------------------------------------------
-
+        # The locale.gen entry must explicitly contain UTF-8.
         if [[ ! "$line" =~ [[:space:]]+UTF-8([[:space:]]*)$ ]]
         then
             continue
         fi
-
-        #----------------------------------------------------
-        # Avoid duplicates
-        #----------------------------------------------------
 
         if [[ -v "LOCALE_ENABLED[$locale_name]" ]]
         then
@@ -176,20 +101,9 @@ locale_load()
 
     done < "$file"
 
-    #--------------------------------------------------------
-    # Validate result
-    #--------------------------------------------------------
-
     if (( ${#LOCALE_LIST[@]} == 0 ))
     then
-        if declare -F dialog_error >/dev/null 2>&1
-        then
-            dialog_error \
-                "Locale" \
-                "No UTF-8 locales found in ${file}"
-        fi
-
-        locale_log_error \
+        dialog_error \
             "No UTF-8 locales found"
 
         return 1
@@ -199,14 +113,14 @@ locale_load()
     LOCALE_OFFSET=0
     LOCALE_DEFAULT_SELECTED=""
 
-    locale_log_info \
+    logger_info \
         "Locales loaded: ${#LOCALE_LIST[@]}"
 
     return 0
 }
 
 #============================================================
-# Restore saved selection
+# Restore configuration
 #============================================================
 
 locale_restore_config()
@@ -216,21 +130,12 @@ locale_restore_config()
     local locale
     local index
 
-    #--------------------------------------------------------
-    # Restore selected locales
-    #--------------------------------------------------------
+    configured="$(
+        config_get LOCALES \
+            2>/dev/null \
+            || true
+    )"
 
-    if declare -F config_get >/dev/null 2>&1
-    then
-        configured="$(
-            config_get \
-                LOCALES \
-                2>/dev/null \
-                || true
-        )"
-    fi
-
-    # LOCALES is stored as a space-separated list.
     for locale in $configured
     do
         if [[ -v "LOCALE_ENABLED[$locale]" ]]
@@ -239,25 +144,13 @@ locale_restore_config()
         fi
     done
 
-    #--------------------------------------------------------
-    # Restore default LANG
-    #--------------------------------------------------------
-
-    if declare -F config_get >/dev/null 2>&1
-    then
-        default_locale="$(
-            config_get \
-                LOCALE \
-                2>/dev/null \
-                || true
-        )"
-    fi
+    default_locale="$(
+        config_get LOCALE \
+            2>/dev/null \
+            || true
+    )"
 
     LOCALE_DEFAULT_SELECTED="$default_locale"
-
-    #--------------------------------------------------------
-    # Position cursor on saved default locale
-    #--------------------------------------------------------
 
     if [[ -n "$default_locale" ]]
     then
@@ -271,23 +164,14 @@ locale_restore_config()
         done
     fi
 
-    #--------------------------------------------------------
-    # Keep selected item inside visible window
-    #--------------------------------------------------------
-
     if (( LOCALE_SELECTED >= LOCALE_OFFSET + LOCALE_VISIBLE ))
     then
         LOCALE_OFFSET=$(
-            (
-                LOCALE_SELECTED - LOCALE_VISIBLE + 1
-            )
+            LOCALE_SELECTED - LOCALE_VISIBLE + 1
         )
     fi
 
-    if (( LOCALE_OFFSET < 0 ))
-    then
-        LOCALE_OFFSET=0
-    fi
+    (( LOCALE_OFFSET >= 0 )) || LOCALE_OFFSET=0
 
     return 0
 }
@@ -300,10 +184,7 @@ locale_previous()
 {
     local count="${#LOCALE_LIST[@]}"
 
-    if (( count == 0 ))
-    then
-        return 1
-    fi
+    (( count > 0 )) || return 1
 
     if (( LOCALE_SELECTED > 0 ))
     then
@@ -334,10 +215,7 @@ locale_next()
 {
     local count="${#LOCALE_LIST[@]}"
 
-    if (( count == 0 ))
-    then
-        return 1
-    fi
+    (( count > 0 )) || return 1
 
     if (( LOCALE_SELECTED < count - 1 ))
     then
@@ -348,7 +226,9 @@ locale_next()
 
     if (( LOCALE_SELECTED >= LOCALE_OFFSET + LOCALE_VISIBLE ))
     then
-        LOCALE_OFFSET=$((LOCALE_SELECTED - LOCALE_VISIBLE + 1))
+        LOCALE_OFFSET=$(
+            LOCALE_SELECTED - LOCALE_VISIBLE + 1
+        )
     fi
 
     if (( LOCALE_SELECTED == 0 ))
@@ -367,10 +247,7 @@ locale_toggle()
 {
     local locale
 
-    if (( ${#LOCALE_LIST[@]} == 0 ))
-    then
-        return 1
-    fi
+    (( ${#LOCALE_LIST[@]} > 0 )) || return 1
 
     locale="${LOCALE_LIST[LOCALE_SELECTED]}"
 
@@ -381,7 +258,7 @@ locale_toggle()
         LOCALE_ENABLED["$locale"]=1
     fi
 
-    locale_log_info \
+    logger_debug \
         "Locale ${locale}: ${LOCALE_ENABLED[$locale]}"
 
     return 0
@@ -399,38 +276,23 @@ locale_draw()
     local locale
     local mark
 
-    if declare -F screen_prepare >/dev/null 2>&1
-    then
-        screen_prepare || return 1
-    elif declare -F tui_clear >/dev/null 2>&1
-    then
-        tui_clear || return 1
-    fi
+    screen_prepare || return 1
 
-    if declare -F titlebar_draw >/dev/null 2>&1
-    then
-        titlebar_draw \
-            "Locale selection" || return 1
-    fi
+    titlebar_draw \
+        "Locale selection" || return 1
 
-    if declare -F draw_panel >/dev/null 2>&1
-    then
-        draw_panel \
-            "Select locales (Space Toggle)" \
-            3 \
-            5 \
-            18 \
-            65 || return 1
-    fi
+    draw_panel \
+        "Select locales (Space Toggle)" \
+        3 \
+        5 \
+        18 \
+        65 || return 1
 
     end=$((LOCALE_OFFSET + LOCALE_VISIBLE))
 
     for (( index=LOCALE_OFFSET; index<end; index++ ))
     do
-        if (( index >= ${#LOCALE_LIST[@]} ))
-        then
-            break
-        fi
+        (( index < ${#LOCALE_LIST[@]} )) || break
 
         locale="${LOCALE_LIST[index]}"
 
@@ -441,76 +303,35 @@ locale_draw()
             mark=" "
         fi
 
-        if declare -F tui_move >/dev/null 2>&1
-        then
-            tui_move \
-                "$row" \
-                8 || return 1
-        elif declare -F cursor_move >/dev/null 2>&1
-        then
-            cursor_move \
-                "$row" \
-                8 || return 1
-        fi
+        cursor_move \
+            "$row" \
+            8 || return 1
 
         if (( index == LOCALE_SELECTED ))
         then
-            if declare -F color_selected >/dev/null 2>&1
-            then
-                color_selected \
-                    "> [${mark}] ${locale}"
-            else
-                printf \
-                    '> [%s] %s' \
-                    "$mark" \
-                    "$locale"
-            fi
+            printf '> [%s] %s' \
+                "$mark" \
+                "$locale"
         else
-            if declare -F tui_print >/dev/null 2>&1
-            then
-                tui_print \
-                    "  [${mark}] ${locale}"
-            else
-                printf \
-                    '  [%s] %s' \
-                    "$mark" \
-                    "$locale"
-            fi
+            printf '  [%s] %s' \
+                "$mark" \
+                "$locale"
         fi
 
         row=$((row + 1))
     done
 
-    if declare -F tui_move >/dev/null 2>&1
-    then
-        tui_move \
-            20 \
-            8 || return 1
-    elif declare -F cursor_move >/dev/null 2>&1
-    then
-        cursor_move \
-            20 \
-            8 || return 1
-    fi
+    cursor_move 20 8 || return 1
 
-    printf \
-        '%d/%d' \
+    printf '%d/%d' \
         "$((LOCALE_SELECTED + 1))" \
         "${#LOCALE_LIST[@]}"
 
-    if declare -F statusbar_draw >/dev/null 2>&1
-    then
-        statusbar_draw \
-            "↑↓ Move  Space Toggle  Enter Continue  Esc Back" \
-            || return 1
-    fi
+    statusbar_draw \
+        "↑↓ Move  Space Toggle  Enter Continue  Esc Back" \
+        || return 1
 
-    if declare -F screen_refresh >/dev/null 2>&1
-    then
-        screen_refresh \
-            2>/dev/null \
-            || true
-    fi
+    screen_refresh || return 1
 
     return 0
 }
@@ -527,8 +348,7 @@ locale_get_selected()
     do
         if [[ "${LOCALE_ENABLED[$locale]:-0}" == "1" ]]
         then
-            printf '%s\n' \
-                "$locale"
+            printf '%s\n' "$locale"
         fi
     done
 
@@ -536,7 +356,7 @@ locale_get_selected()
 }
 
 #============================================================
-# Default locale selector
+# Select default locale
 #============================================================
 
 locale_select_default()
@@ -549,43 +369,26 @@ locale_select_default()
     local row
     local index
     local end
-    local event=""
+    local event
 
-    #--------------------------------------------------------
-    # Build selected locale list
-    #--------------------------------------------------------
-
-    while IFS= read -r locale
-    do
-        [[ -n "$locale" ]] &&
-            locales+=(
-                "$locale"
-            )
-    done < <(
+    mapfile -t locales < <(
         locale_get_selected
     )
 
     if (( ${#locales[@]} == 0 ))
     then
-        if declare -F dialog_error >/dev/null 2>&1
-        then
-            dialog_error \
-                "Locale" \
-                "No locales selected"
-        fi
+        dialog_error \
+            "No locales selected"
 
         return 1
     fi
-
-    #--------------------------------------------------------
-    # Restore previous default
-    #--------------------------------------------------------
 
     if [[ -n "$LOCALE_DEFAULT_SELECTED" ]]
     then
         for index in "${!locales[@]}"
         do
-            if [[ "${locales[index]}" == "$LOCALE_DEFAULT_SELECTED" ]]
+            if [[ "${locales[index]}" ==
+                  "$LOCALE_DEFAULT_SELECTED" ]]
             then
                 selected="$index"
                 break
@@ -593,118 +396,56 @@ locale_select_default()
         done
     fi
 
-    #========================================================
-    # Default locale loop
-    #========================================================
-
     while true
     do
-        if declare -F screen_prepare >/dev/null 2>&1
-        then
-            screen_prepare || return 1
-        elif declare -F tui_clear >/dev/null 2>&1
-        then
-            tui_clear || return 1
-        fi
+        screen_prepare || return 1
 
-        if declare -F titlebar_draw >/dev/null 2>&1
-        then
-            titlebar_draw \
-                "Default system locale" || return 1
-        fi
+        titlebar_draw \
+            "Default system locale" || return 1
 
-        if declare -F draw_panel >/dev/null 2>&1
-        then
-            draw_panel \
-                "Select LANG locale" \
-                3 \
-                5 \
-                18 \
-                65 || return 1
-        fi
+        draw_panel \
+            "Select LANG locale" \
+            3 \
+            5 \
+            18 \
+            65 || return 1
 
         row=5
         end=$((offset + visible))
 
         for (( index=offset; index<end; index++ ))
         do
-            if (( index >= ${#locales[@]} ))
-            then
-                break
-            fi
+            (( index < ${#locales[@]} )) || break
 
-            if declare -F tui_move >/dev/null 2>&1
-            then
-                tui_move \
-                    "$row" \
-                    8 || return 1
-            elif declare -F cursor_move >/dev/null 2>&1
-            then
-                cursor_move \
-                    "$row" \
-                    8 || return 1
-            fi
+            cursor_move \
+                "$row" \
+                8 || return 1
 
             if (( index == selected ))
             then
-                if declare -F color_selected >/dev/null 2>&1
-                then
-                    color_selected \
-                        "> ${locales[index]}"
-                else
-                    printf \
-                        '> %s' \
-                        "${locales[index]}"
-                fi
+                printf '> %s' \
+                    "${locales[index]}"
             else
-                if declare -F tui_print >/dev/null 2>&1
-                then
-                    tui_print \
-                        "  ${locales[index]}"
-                else
-                    printf \
-                        '  %s' \
-                        "${locales[index]}"
-                fi
+                printf '  %s' \
+                    "${locales[index]}"
             fi
 
             row=$((row + 1))
         done
 
-        if declare -F statusbar_draw >/dev/null 2>&1
-        then
-            statusbar_draw \
-                "↑↓ Select  Enter Choose  Esc Back" \
-                || return 1
-        fi
+        statusbar_draw \
+            "↑↓ Select  Enter Choose  Esc Back" \
+            || return 1
 
-        if declare -F screen_refresh >/dev/null 2>&1
-        then
-            screen_refresh \
-                2>/dev/null \
-                || true
-        fi
+        screen_refresh || return 1
 
-        #----------------------------------------------------
-        # IMPORTANT:
-        # event_read() writes to TUI_EVENT.
-        #----------------------------------------------------
-
-        if ! event_read
-        then
-            locale_log_error \
-                "event_read() failed while selecting default locale"
-
-            return 1
-        fi
-
-        event="${TUI_EVENT:-}"
+        event="$(
+            event_read
+        )"
 
         case "$event"
         in
-
             "$EVENT_UP")
-
                 if (( selected > 0 ))
                 then
                     selected=$((selected - 1))
@@ -726,11 +467,9 @@ locale_select_default()
                         offset=0
                     fi
                 fi
-
                 ;;
 
             "$EVENT_DOWN")
-
                 if (( selected < ${#locales[@]} - 1 ))
                 then
                     selected=$((selected + 1))
@@ -747,30 +486,18 @@ locale_select_default()
                 then
                     offset=0
                 fi
-
                 ;;
 
             "$EVENT_SELECT")
-
                 LOCALE_DEFAULT_SELECTED="${locales[selected]}"
-
-                locale_log_info \
-                    "Default locale selected: ${LOCALE_DEFAULT_SELECTED}"
-
                 return 0
                 ;;
 
             "$EVENT_BACK")
-
-                locale_log_warn \
-                    "Default locale selection cancelled"
-
                 return 1
                 ;;
 
             *)
-                locale_log_warn \
-                    "Unknown locale event: ${event:-<empty>}"
                 ;;
         esac
     done
@@ -788,10 +515,6 @@ locale_apply()
     local count
     local default_locale
 
-    #--------------------------------------------------------
-    # Get selected locales
-    #--------------------------------------------------------
-
     mapfile -t selected < <(
         locale_get_selected
     )
@@ -800,137 +523,84 @@ locale_apply()
 
     if (( count == 0 ))
     then
-        if declare -F dialog_error >/dev/null 2>&1
-        then
-            dialog_error \
-                "Locale" \
-                "Select at least one locale"
-        fi
+        dialog_error \
+            "Select at least one locale"
 
         return 1
     fi
 
     locale_list="${selected[*]}"
 
-    #========================================================
-    # Determine default LANG
-    #========================================================
-
     if (( count == 1 ))
     then
         default_locale="${selected[0]}"
     else
-        default_locale="$(
-            config_get \
-                LOCALE \
-                2>/dev/null \
-                || true
-        )"
-
-        LOCALE_DEFAULT_SELECTED="$default_locale"
-
-        if ! locale_select_default
+        if [[ -z "$LOCALE_DEFAULT_SELECTED" ]]
         then
-            return 1
+            LOCALE_DEFAULT_SELECTED="$(
+                config_get LOCALE \
+                    2>/dev/null \
+                    || true
+            )"
         fi
+
+        locale_select_default || return 1
 
         default_locale="$LOCALE_DEFAULT_SELECTED"
     fi
 
     if [[ -z "$default_locale" ]]
     then
-        if declare -F dialog_error >/dev/null 2>&1
-        then
-            dialog_error \
-                "Locale" \
-                "Default locale was not selected"
-        fi
+        dialog_error \
+            "Default locale was not selected"
 
         return 1
     fi
 
-    #--------------------------------------------------------
-    # Verify LANG belongs to selected locales
-    #--------------------------------------------------------
-
-    if ! printf '%s\n' \
-        "${selected[@]}" |
-        grep -Fxq \
-            "$default_locale"
+    if ! printf '%s\n' "${selected[@]}" |
+        grep -Fxq "$default_locale"
     then
-        if declare -F dialog_error >/dev/null 2>&1
-        then
-            dialog_error \
-                "Locale" \
-                "Default locale is not among selected locales"
-        fi
+        dialog_error \
+            "Default locale is not among selected locales"
 
         return 1
     fi
 
-    #========================================================
-    # Save LOCALES
-    #========================================================
-
-    if ! config_set \
-        LOCALES \
-        "$locale_list"
+    if ! config_set LOCALES "$locale_list"
     then
-        locale_log_error \
+        logger_error \
             "Failed to store LOCALES"
 
         return 1
     fi
 
-    #========================================================
-    # Save LANG
-    #========================================================
-
-    if ! config_set \
-        LOCALE \
-        "$default_locale"
+    if ! config_set LOCALE "$default_locale"
     then
-        locale_log_error \
+        logger_error \
             "Failed to store LOCALE"
 
         return 1
     fi
 
-    #========================================================
-    # Save configuration
-    #========================================================
-
     if ! config_save
     then
-        if declare -F dialog_error >/dev/null 2>&1
-        then
-            dialog_error \
-                "Locale" \
-                "Failed to save locale configuration"
-        fi
+        dialog_error \
+            "Failed to save locale configuration"
 
         return 1
     fi
 
-    locale_log_info \
+    logger_info \
         "Locales selected: ${locale_list}"
 
-    locale_log_info \
+    logger_info \
         "Default locale: ${default_locale}"
-
-    #--------------------------------------------------------
-    # Optional informational dialog.
-    #
-    # Do not make this dialog part of the control flow.
-    # The caller must continue immediately after success.
-    #--------------------------------------------------------
 
     if declare -F dialog_message >/dev/null 2>&1
     then
         dialog_message \
             "Locale" \
-            "LANG=${default_locale}" \
-            || true
+            "LANG=${default_locale}" || true
     fi
 
     return 0
@@ -942,144 +612,55 @@ locale_apply()
 
 locale()
 {
-    local event=""
+    local event
 
-    locale_log_info \
+    logger_info \
         "Locale configuration started"
 
-    #--------------------------------------------------------
-    # Load /etc/locale.gen
-    #--------------------------------------------------------
+    locale_load || return 1
 
-    if ! locale_load
-    then
-        locale_log_error \
-            "locale_load() failed"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Restore saved values
-    #--------------------------------------------------------
-
-    if ! locale_restore_config
-    then
-        locale_log_error \
-            "locale_restore_config() failed"
-
-        return 1
-    fi
-
-    #========================================================
-    # Selection loop
-    #========================================================
+    locale_restore_config || return 1
 
     while true
     do
-        if ! locale_draw
-        then
-            locale_log_error \
-                "locale_draw() failed"
+        locale_draw || return 1
 
-            return 1
-        fi
-
-        #----------------------------------------------------
-        # IMPORTANT:
-        # event_read() writes the event to TUI_EVENT.
-        #----------------------------------------------------
-
-        if ! event_read
-        then
-            locale_log_error \
-                "event_read() failed"
-
-            return 1
-        fi
-
-        event="${TUI_EVENT:-}"
+        event="$(
+            event_read
+        )"
 
         case "$event"
         in
-
-            #------------------------------------------------
-            # Up
-            #------------------------------------------------
-
             "$EVENT_UP")
-
-                locale_previous
-
+                locale_previous || return 1
                 ;;
-
-            #------------------------------------------------
-            # Down
-            #------------------------------------------------
 
             "$EVENT_DOWN")
-
-                locale_next
-
+                locale_next || return 1
                 ;;
-
-            #------------------------------------------------
-            # Space
-            #------------------------------------------------
 
             "$EVENT_SPACE")
-
-                locale_toggle
-
+                locale_toggle || return 1
                 ;;
-
-            #------------------------------------------------
-            # Enter
-            #
-            # IMPORTANT:
-            # Successful Apply MUST return from locale().
-            # This gives control back to installer controller.
-            #------------------------------------------------
 
             "$EVENT_SELECT")
-
-                if ! locale_apply
+                if locale_apply
                 then
-                    locale_log_warn \
-                        "Locale selection was not applied"
+                    logger_info \
+                        "Locale configuration completed"
 
-                    continue
+                    return 0
                 fi
-
-                locale_log_info \
-                    "Locale configuration completed"
-
-                return 0
-
                 ;;
-
-            #------------------------------------------------
-            # Escape
-            #------------------------------------------------
 
             "$EVENT_BACK")
-
-                locale_log_warn \
+                logger_info \
                     "Locale configuration cancelled"
 
-                return 1
-
+                return 0
                 ;;
 
-            #------------------------------------------------
-            # Unknown event
-            #------------------------------------------------
-
             *)
-
-                locale_log_warn \
-                    "Unknown locale event: ${event:-<empty>}"
-
                 ;;
         esac
     done

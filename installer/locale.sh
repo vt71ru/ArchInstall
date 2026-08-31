@@ -1,668 +1,752 @@
+```bash
 #!/usr/bin/env bash
 #
 #============================================================
-# Arch Installer
+#  Arch Installer
 #------------------------------------------------------------
-# installer/locale.sh
+#  installer/installer.sh
 #
-# Выбор локалей системы.
+#  Центральный controller установки.
 #
-# Ответственность:
-#   • чтение /etc/locale.gen
-#   • выбор одной или нескольких UTF-8 локалей
-#   • выбор LANG
-#   • сохранение LOCALES
-#   • сохранение LOCALE
+#  Ответственность:
+#   • запуск отдельных этапов
+#   • запуск полной установки
+#   • проверка этапов
+#   • управление порядком этапов
+#   • запуск главного меню
 #
-# Генерация локалей выполняется locale_generate.sh.
+#  НЕ отвечает за:
+#   • загрузку библиотек
+#   • загрузку installer-модулей
+#   • проверку root
+#   • проверку Arch Linux
+#   • инициализацию TUI
+#   • хранение CONFIG
+#
 #============================================================
 
-if [[ -n "${LOCALE_SH_LOADED:-}" ]]
+#============================================================
+# Include guard
+#============================================================
+
+if [[ -n "${ARCH_INSTALLER_INSTALLER_SH_LOADED:-}" ]]
 then
-    return 0
+    return 0 2>/dev/null || exit 0
 fi
 
-readonly LOCALE_SH_LOADED=1
+ARCH_INSTALLER_INSTALLER_SH_LOADED=1
+export ARCH_INSTALLER_INSTALLER_SH_LOADED
 
 #============================================================
-# State
+# Logging helpers
 #============================================================
 
-declare -ga LOCALE_LIST=()
-declare -gA LOCALE_ENABLED=()
-
-declare -gi LOCALE_SELECTED=0
-declare -gi LOCALE_OFFSET=0
-
-declare -g LOCALE_DEFAULT_SELECTED=""
-
-readonly LOCALE_VISIBLE=12
-
-#============================================================
-# Load locales
-#============================================================
-
-locale_load()
+installer_log()
 {
-    local file="/etc/locale.gen"
-    local line
-    local locale_name
+    local message="${1:-}"
 
-    LOCALE_LIST=()
-    LOCALE_ENABLED=()
-
-    if [[ ! -f "$file" ]]
+    if declare -F tui_log >/dev/null 2>&1
     then
-        dialog_error \
-            "Missing locale.gen: ${file}"
-
-        return 1
+        tui_log "$message" || true
+        return 0
     fi
 
-    while IFS= read -r line || [[ -n "$line" ]]
+    printf '%s\n' "$message"
+}
+
+installer_log_info()
+{
+    local message="${1:-}"
+
+    if declare -F logger_info >/dev/null 2>&1
+    then
+        logger_info "$message" || true
+        return 0
+    fi
+
+    printf '[INFO] %s\n' "$message"
+}
+
+installer_log_warn()
+{
+    local message="${1:-}"
+
+    if declare -F logger_warn >/dev/null 2>&1
+    then
+        logger_warn "$message" || true
+        return 0
+    fi
+
+    printf '[WARN] %s\n' "$message" >&2
+}
+
+installer_log_error()
+{
+    local message="${1:-}"
+
+    if declare -F logger_error >/dev/null 2>&1
+    then
+        logger_error "$message" || true
+        return 0
+    fi
+
+    printf '[ERROR] %s\n' "$message" >&2
+}
+
+#============================================================
+# Stage -> function mapping
+#============================================================
+
+installer_get_stage_function()
+{
+    local stage="${1:-}"
+
+    case "$stage"
+    in
+        welcome)
+            printf '%s\n' 'welcome'
+            ;;
+
+        keyboard)
+            printf '%s\n' 'keyboard'
+            ;;
+
+        locale)
+            printf '%s\n' 'locale'
+            ;;
+
+        locale_generate)
+            printf '%s\n' 'locale_generate'
+            ;;
+
+        network)
+            printf '%s\n' 'network'
+            ;;
+
+        mirrors)
+            printf '%s\n' 'mirrors'
+            ;;
+
+        disks)
+            printf '%s\n' 'disks'
+            ;;
+
+        partition)
+            printf '%s\n' 'partition'
+            ;;
+
+        filesystem)
+            printf '%s\n' 'filesystem'
+            ;;
+
+        mount)
+            printf '%s\n' 'mount'
+            ;;
+
+        packages)
+            printf '%s\n' 'packages_install'
+            ;;
+
+        users)
+            printf '%s\n' 'users_configure'
+            ;;
+
+        desktop)
+            printf '%s\n' 'desktop_install'
+            ;;
+
+        services)
+            printf '%s\n' 'services_configure'
+            ;;
+
+        bootloader)
+            printf '%s\n' 'bootloader_install'
+            ;;
+
+        summary)
+            printf '%s\n' 'summary_show'
+            ;;
+
+        *)
+            return 1
+            ;;
+    esac
+}
+
+#============================================================
+# Stage title
+#============================================================
+
+installer_get_stage_title()
+{
+    local stage="${1:-}"
+
+    case "$stage"
+    in
+        welcome)
+            printf '%s\n' 'Welcome'
+            ;;
+
+        keyboard)
+            printf '%s\n' 'Keyboard configuration'
+            ;;
+
+        locale)
+            printf '%s\n' 'Locale configuration'
+            ;;
+
+        locale_generate)
+            printf '%s\n' 'Locale generation'
+            ;;
+
+        network)
+            printf '%s\n' 'Network configuration'
+            ;;
+
+        mirrors)
+            printf '%s\n' 'Mirror configuration'
+            ;;
+
+        disks)
+            printf '%s\n' 'Disk selection'
+            ;;
+
+        partition)
+            printf '%s\n' 'Disk partitioning'
+            ;;
+
+        filesystem)
+            printf '%s\n' 'Filesystem creation'
+            ;;
+
+        mount)
+            printf '%s\n' 'Mount filesystems'
+            ;;
+
+        packages)
+            printf '%s\n' 'Package installation'
+            ;;
+
+        users)
+            printf '%s\n' 'User configuration'
+            ;;
+
+        desktop)
+            printf '%s\n' 'Desktop installation'
+            ;;
+
+        services)
+            printf '%s\n' 'Service configuration'
+            ;;
+
+        bootloader)
+            printf '%s\n' 'Bootloader installation'
+            ;;
+
+        summary)
+            printf '%s\n' 'Installation summary'
+            ;;
+
+        *)
+            printf '%s\n' "$stage"
+            ;;
+    esac
+}
+
+#============================================================
+# Full installation stage list
+#============================================================
+
+installer_full_installation_stages()
+{
+    printf '%s\n' \
+        keyboard \
+        locale \
+        locale_generate \
+        network \
+        mirrors \
+        disks \
+        partition \
+        filesystem \
+        mount \
+        packages \
+        users \
+        desktop \
+        services \
+        bootloader \
+        summary
+}
+
+#============================================================
+# Get total stage count
+#============================================================
+
+installer_get_stage_count()
+{
+    local count=0
+    local stage
+
+    while IFS= read -r stage
     do
-        line="${line#"${line%%[![:space:]]*}"}"
-
-        [[ -z "$line" ]] && continue
-
-        # Ignore comments which are not locale definitions.
-        if [[ "$line" == \#* ]]
-        then
-            line="${line#\#}"
-            line="${line#"${line%%[![:space:]]*}"}"
-        fi
-
-        # Ignore malformed lines.
-        [[ "$line" == \#* ]] && continue
-
-        locale_name="${line%%[[:space:]]*}"
-
-        [[ -n "$locale_name" ]] || continue
-
-        # Only UTF-8 locales.
-        [[ "$locale_name" == *.UTF-8 ]] || continue
-
-        # The locale.gen entry must explicitly contain UTF-8.
-        if [[ ! "$line" =~ [[:space:]]+UTF-8([[:space:]]*)$ ]]
-        then
-            continue
-        fi
-
-        if [[ -v "LOCALE_ENABLED[$locale_name]" ]]
-        then
-            continue
-        fi
-
-        LOCALE_LIST+=(
-            "$locale_name"
-        )
-
-        LOCALE_ENABLED["$locale_name"]=0
-
-    done < "$file"
-
-    if (( ${#LOCALE_LIST[@]} == 0 ))
-    then
-        dialog_error \
-            "No UTF-8 locales found"
-
-        return 1
-    fi
-
-    LOCALE_SELECTED=0
-    LOCALE_OFFSET=0
-    LOCALE_DEFAULT_SELECTED=""
-
-    logger_info \
-        "Locales loaded: ${#LOCALE_LIST[@]}"
-
-    return 0
-}
-
-#============================================================
-# Restore configuration
-#============================================================
-
-locale_restore_config()
-{
-    local configured=""
-    local default_locale=""
-    local locale
-    local index
-
-    configured="$(
-        config_get LOCALES \
-            2>/dev/null \
-            || true
-    )"
-
-    for locale in $configured
-    do
-        if [[ -v "LOCALE_ENABLED[$locale]" ]]
-        then
-            LOCALE_ENABLED["$locale"]=1
-        fi
-    done
-
-    default_locale="$(
-        config_get LOCALE \
-            2>/dev/null \
-            || true
-    )"
-
-    LOCALE_DEFAULT_SELECTED="$default_locale"
-
-    if [[ -n "$default_locale" ]]
-    then
-        for index in "${!LOCALE_LIST[@]}"
-        do
-            if [[ "${LOCALE_LIST[index]}" == "$default_locale" ]]
-            then
-                LOCALE_SELECTED="$index"
-                break
-            fi
-        done
-    fi
-
-    if (( LOCALE_SELECTED >= LOCALE_OFFSET + LOCALE_VISIBLE ))
-    then
-        LOCALE_OFFSET=$(
-            LOCALE_SELECTED - LOCALE_VISIBLE + 1
-        )
-    fi
-
-    (( LOCALE_OFFSET >= 0 )) || LOCALE_OFFSET=0
-
-    return 0
-}
-
-#============================================================
-# Navigation
-#============================================================
-
-locale_previous()
-{
-    local count="${#LOCALE_LIST[@]}"
-
-    (( count > 0 )) || return 1
-
-    if (( LOCALE_SELECTED > 0 ))
-    then
-        LOCALE_SELECTED=$((LOCALE_SELECTED - 1))
-    else
-        LOCALE_SELECTED=$((count - 1))
-    fi
-
-    if (( LOCALE_SELECTED < LOCALE_OFFSET ))
-    then
-        LOCALE_OFFSET="$LOCALE_SELECTED"
-    fi
-
-    if (( LOCALE_SELECTED == count - 1 ))
-    then
-        LOCALE_OFFSET=$((count - LOCALE_VISIBLE))
-
-        if (( LOCALE_OFFSET < 0 ))
-        then
-            LOCALE_OFFSET=0
-        fi
-    fi
-
-    return 0
-}
-
-locale_next()
-{
-    local count="${#LOCALE_LIST[@]}"
-
-    (( count > 0 )) || return 1
-
-    if (( LOCALE_SELECTED < count - 1 ))
-    then
-        LOCALE_SELECTED=$((LOCALE_SELECTED + 1))
-    else
-        LOCALE_SELECTED=0
-    fi
-
-    if (( LOCALE_SELECTED >= LOCALE_OFFSET + LOCALE_VISIBLE ))
-    then
-        LOCALE_OFFSET=$(
-            LOCALE_SELECTED - LOCALE_VISIBLE + 1
-        )
-    fi
-
-    if (( LOCALE_SELECTED == 0 ))
-    then
-        LOCALE_OFFSET=0
-    fi
-
-    return 0
-}
-
-#============================================================
-# Toggle
-#============================================================
-
-locale_toggle()
-{
-    local locale
-
-    (( ${#LOCALE_LIST[@]} > 0 )) || return 1
-
-    locale="${LOCALE_LIST[LOCALE_SELECTED]}"
-
-    if [[ "${LOCALE_ENABLED[$locale]:-0}" == "1" ]]
-    then
-        LOCALE_ENABLED["$locale"]=0
-    else
-        LOCALE_ENABLED["$locale"]=1
-    fi
-
-    logger_debug \
-        "Locale ${locale}: ${LOCALE_ENABLED[$locale]}"
-
-    return 0
-}
-
-#============================================================
-# Draw
-#============================================================
-
-locale_draw()
-{
-    local row=5
-    local index
-    local end
-    local locale
-    local mark
-
-    screen_prepare || return 1
-
-    titlebar_draw \
-        "Locale selection" || return 1
-
-    draw_panel \
-        "Select locales (Space Toggle)" \
-        3 \
-        5 \
-        18 \
-        65 || return 1
-
-    end=$((LOCALE_OFFSET + LOCALE_VISIBLE))
-
-    for (( index=LOCALE_OFFSET; index<end; index++ ))
-    do
-        (( index < ${#LOCALE_LIST[@]} )) || break
-
-        locale="${LOCALE_LIST[index]}"
-
-        if [[ "${LOCALE_ENABLED[$locale]:-0}" == "1" ]]
-        then
-            mark="x"
-        else
-            mark=" "
-        fi
-
-        cursor_move \
-            "$row" \
-            8 || return 1
-
-        if (( index == LOCALE_SELECTED ))
-        then
-            printf '> [%s] %s' \
-                "$mark" \
-                "$locale"
-        else
-            printf '  [%s] %s' \
-                "$mark" \
-                "$locale"
-        fi
-
-        row=$((row + 1))
-    done
-
-    cursor_move 20 8 || return 1
-
-    printf '%d/%d' \
-        "$((LOCALE_SELECTED + 1))" \
-        "${#LOCALE_LIST[@]}"
-
-    statusbar_draw \
-        "↑↓ Move  Space Toggle  Enter Continue  Esc Back" \
-        || return 1
-
-    screen_refresh || return 1
-
-    return 0
-}
-
-#============================================================
-# Selected locales
-#============================================================
-
-locale_get_selected()
-{
-    local locale
-
-    for locale in "${LOCALE_LIST[@]}"
-    do
-        if [[ "${LOCALE_ENABLED[$locale]:-0}" == "1" ]]
-        then
-            printf '%s\n' "$locale"
-        fi
-    done
-
-    return 0
-}
-
-#============================================================
-# Select default locale
-#============================================================
-
-locale_select_default()
-{
-    local locales=()
-    local locale
-    local selected=0
-    local offset=0
-    local visible="$LOCALE_VISIBLE"
-    local row
-    local index
-    local end
-    local event
-
-    mapfile -t locales < <(
-        locale_get_selected
+        [[ -z "$stage" ]] && continue
+        count=$((count + 1))
+    done < <(
+        installer_full_installation_stages
     )
 
-    if (( ${#locales[@]} == 0 ))
-    then
-        dialog_error \
-            "No locales selected"
-
-        return 1
-    fi
-
-    if [[ -n "$LOCALE_DEFAULT_SELECTED" ]]
-    then
-        for index in "${!locales[@]}"
-        do
-            if [[ "${locales[index]}" ==
-                  "$LOCALE_DEFAULT_SELECTED" ]]
-            then
-                selected="$index"
-                break
-            fi
-        done
-    fi
-
-    while true
-    do
-        screen_prepare || return 1
-
-        titlebar_draw \
-            "Default system locale" || return 1
-
-        draw_panel \
-            "Select LANG locale" \
-            3 \
-            5 \
-            18 \
-            65 || return 1
-
-        row=5
-        end=$((offset + visible))
-
-        for (( index=offset; index<end; index++ ))
-        do
-            (( index < ${#locales[@]} )) || break
-
-            cursor_move \
-                "$row" \
-                8 || return 1
-
-            if (( index == selected ))
-            then
-                printf '> %s' \
-                    "${locales[index]}"
-            else
-                printf '  %s' \
-                    "${locales[index]}"
-            fi
-
-            row=$((row + 1))
-        done
-
-        statusbar_draw \
-            "↑↓ Select  Enter Choose  Esc Back" \
-            || return 1
-
-        screen_refresh || return 1
-
-        event="$(
-            event_read
-        )"
-
-        case "$event"
-        in
-            "$EVENT_UP")
-                if (( selected > 0 ))
-                then
-                    selected=$((selected - 1))
-                else
-                    selected=$(( ${#locales[@]} - 1 ))
-                fi
-
-                if (( selected < offset ))
-                then
-                    offset="$selected"
-                fi
-
-                if (( selected == ${#locales[@]} - 1 ))
-                then
-                    offset=$(( ${#locales[@]} - visible ))
-
-                    if (( offset < 0 ))
-                    then
-                        offset=0
-                    fi
-                fi
-                ;;
-
-            "$EVENT_DOWN")
-                if (( selected < ${#locales[@]} - 1 ))
-                then
-                    selected=$((selected + 1))
-                else
-                    selected=0
-                fi
-
-                if (( selected >= offset + visible ))
-                then
-                    offset=$((selected - visible + 1))
-                fi
-
-                if (( selected == 0 ))
-                then
-                    offset=0
-                fi
-                ;;
-
-            "$EVENT_SELECT")
-                LOCALE_DEFAULT_SELECTED="${locales[selected]}"
-                return 0
-                ;;
-
-            "$EVENT_BACK")
-                return 1
-                ;;
-
-            *)
-                ;;
-        esac
-    done
+    printf '%s\n' "$count"
 }
 
 #============================================================
-# Apply
+# Check one stage
 #============================================================
 
-locale_apply()
+installer_check_stage()
 {
-    local selected=()
-    local locale
-    local locale_list
-    local count
-    local default_locale
+    local stage="${1:-}"
+    local function_name=""
 
-    mapfile -t selected < <(
-        locale_get_selected
-    )
-
-    count="${#selected[@]}"
-
-    if (( count == 0 ))
+    if [[ -z "$stage" ]]
     then
-        dialog_error \
-            "Select at least one locale"
+        installer_log_error \
+            "installer_check_stage: empty stage"
 
         return 1
     fi
 
-    locale_list="${selected[*]}"
-
-    if (( count == 1 ))
+    if ! function_name="$(
+        installer_get_stage_function "$stage"
+    )"
     then
-        default_locale="${selected[0]}"
-    else
-        if [[ -z "$LOCALE_DEFAULT_SELECTED" ]]
-        then
-            LOCALE_DEFAULT_SELECTED="$(
-                config_get LOCALE \
-                    2>/dev/null \
-                    || true
-            )"
-        fi
-
-        locale_select_default || return 1
-
-        default_locale="$LOCALE_DEFAULT_SELECTED"
-    fi
-
-    if [[ -z "$default_locale" ]]
-    then
-        dialog_error \
-            "Default locale was not selected"
+        installer_log_error \
+            "Unknown installer stage: ${stage}"
 
         return 1
     fi
 
-    if ! printf '%s\n' "${selected[@]}" |
-        grep -Fxq "$default_locale"
+    if ! declare -F "$function_name" >/dev/null 2>&1
     then
-        dialog_error \
-            "Default locale is not among selected locales"
+        installer_log_error \
+            "Stage function is not loaded: ${function_name} (stage=${stage})"
 
         return 1
-    fi
-
-    if ! config_set LOCALES "$locale_list"
-    then
-        logger_error \
-            "Failed to store LOCALES"
-
-        return 1
-    fi
-
-    if ! config_set LOCALE "$default_locale"
-    then
-        logger_error \
-            "Failed to store LOCALE"
-
-        return 1
-    fi
-
-    if ! config_save
-    then
-        dialog_error \
-            "Failed to save locale configuration"
-
-        return 1
-    fi
-
-    logger_info \
-        "Locales selected: ${locale_list}"
-
-    logger_info \
-        "Default locale: ${default_locale}"
-
-    if declare -F dialog_message >/dev/null 2>&1
-    then
-        dialog_message \
-            "Locale" \
-            "LANG=${default_locale}" || true
     fi
 
     return 0
 }
 
 #============================================================
-# Main
+# Check all stages
 #============================================================
 
-locale()
+installer_check_all_stages()
 {
-    local event
+    local stage
+    local failed=0
 
-    logger_info \
-        "Locale configuration started"
+    installer_log_info \
+        "Checking installer stages..."
 
-    locale_load || return 1
-
-    locale_restore_config || return 1
-
-    while true
+    while IFS= read -r stage
     do
-        locale_draw || return 1
+        [[ -z "$stage" ]] && continue
 
-        event="$(
-            event_read
-        )"
+        installer_log_info \
+            "Checking stage: ${stage}"
 
-        case "$event"
-        in
-            "$EVENT_UP")
-                locale_previous || return 1
-                ;;
+        if ! installer_check_stage "$stage"
+        then
+            installer_log_error \
+                "Stage check failed: ${stage}"
 
-            "$EVENT_DOWN")
-                locale_next || return 1
-                ;;
+            failed=1
+        fi
 
-            "$EVENT_SPACE")
-                locale_toggle || return 1
-                ;;
+    done < <(
+        installer_full_installation_stages
+    )
 
-            "$EVENT_SELECT")
-                if locale_apply
-                then
-                    logger_info \
-                        "Locale configuration completed"
+    if (( failed != 0 ))
+    then
+        installer_log_error \
+            "One or more installer stages are unavailable"
 
-                    return 0
-                fi
-                ;;
+        return 1
+    fi
 
-            "$EVENT_BACK")
-                logger_info \
-                    "Locale configuration cancelled"
+    installer_log_info \
+        "All installer stages are available"
 
-                return 0
-                ;;
-
-            *)
-                ;;
-        esac
-    done
+    return 0
 }
 
+#============================================================
+# Run one stage
+#============================================================
+
+installer_run_stage()
+{
+    local stage="${1:-}"
+    local function_name=""
+    local title=""
+    local rc=0
+
+    if [[ -z "$stage" ]]
+    then
+        installer_log_error \
+            "installer_run_stage: empty stage"
+
+        return 1
+    fi
+
+    if ! function_name="$(
+        installer_get_stage_function "$stage"
+    )"
+    then
+        installer_log_error \
+            "Unknown installer stage: ${stage}"
+
+        return 1
+    fi
+
+    title="$(
+        installer_get_stage_title "$stage"
+    )"
+
+    if ! declare -F "$function_name" >/dev/null 2>&1
+    then
+        installer_log_error \
+            "Function not found: ${function_name}"
+
+        return 127
+    fi
+
+    installer_log_info \
+        "Starting stage: ${title}"
+
+    #--------------------------------------------------------
+    # IMPORTANT
+    #
+    # The function call is inside an if statement.
+    # This prevents set -e from terminating the controller
+    # before we can capture the real return code.
+    #--------------------------------------------------------
+
+    if "$function_name"
+    then
+        rc=0
+    else
+        rc=$?
+    fi
+
+    if (( rc != 0 ))
+    then
+        installer_log_error \
+            "Stage failed: ${title}"
+
+        installer_log_error \
+            "Stage name: ${stage}"
+
+        installer_log_error \
+            "Function: ${function_name}"
+
+        installer_log_error \
+            "Exit code: ${rc}"
+
+        return "$rc"
+    fi
+
+    installer_log_info \
+        "Stage completed: ${title}"
+
+    return 0
+}
+
+#============================================================
+# Full installation
+#============================================================
+
+installer_full_install()
+{
+    local stage=""
+    local title=""
+    local rc=0
+    local step=0
+    local total=0
+
+    installer_log_info \
+        "=========================================="
+
+    installer_log_info \
+        "STARTING FULL INSTALLATION"
+
+    installer_log_info \
+        "=========================================="
+
+    #--------------------------------------------------------
+    # Verify all stages before starting.
+    #--------------------------------------------------------
+
+    if ! installer_check_all_stages
+    then
+        installer_log_error \
+            "Full installation cannot start."
+
+        return 1
+    fi
+
+    total="$(
+        installer_get_stage_count
+    )"
+
+    if [[ -z "$total" || "$total" == "0" ]]
+    then
+        installer_log_error \
+            "No installation stages defined."
+
+        return 1
+    fi
+
+    installer_log_info \
+        "Total installation stages: ${total}"
+
+    #--------------------------------------------------------
+    # Execute stages sequentially.
+    #--------------------------------------------------------
+
+    while IFS= read -r stage
+    do
+        [[ -z "$stage" ]] && continue
+
+        step=$((step + 1))
+
+        title="$(
+            installer_get_stage_title "$stage"
+        )"
+
+        installer_log_info \
+            "------------------------------------------"
+
+        installer_log_info \
+            "STEP ${step}/${total}: ${title}"
+
+        installer_log_info \
+            "Stage ID: ${stage}"
+
+        installer_log_info \
+            "------------------------------------------"
+
+        if installer_run_stage "$stage"
+        then
+            rc=0
+        else
+            rc=$?
+        fi
+
+        if (( rc != 0 ))
+        then
+            installer_log_error \
+                "=========================================="
+
+            installer_log_error \
+                "FULL INSTALLATION FAILED"
+
+            installer_log_error \
+                "Failed stage: ${title}"
+
+            installer_log_error \
+                "Stage ID: ${stage}"
+
+            installer_log_error \
+                "Exit code: ${rc}"
+
+            installer_log_error \
+                "=========================================="
+
+            return "$rc"
+        fi
+
+    done < <(
+        installer_full_installation_stages
+    )
+
+    installer_log_info \
+        "=========================================="
+
+    installer_log_info \
+        "FULL INSTALLATION COMPLETED SUCCESSFULLY"
+
+    installer_log_info \
+        "=========================================="
+
+    return 0
+}
+
+#============================================================
+# Run operation
+#============================================================
+
+installer_run()
+{
+    local operation="${1:-}"
+
+    case "$operation"
+    in
+        full|full_install|install)
+            installer_full_install
+            ;;
+
+        welcome)
+            installer_run_stage welcome
+            ;;
+
+        keyboard)
+            installer_run_stage keyboard
+            ;;
+
+        locale)
+            installer_run_stage locale
+            ;;
+
+        locale_generate)
+            installer_run_stage locale_generate
+            ;;
+
+        network)
+            installer_run_stage network
+            ;;
+
+        mirrors)
+            installer_run_stage mirrors
+            ;;
+
+        disks|disk)
+            installer_run_stage disks
+            ;;
+
+        partition|part)
+            installer_run_stage partition
+            ;;
+
+        filesystem|fs)
+            installer_run_stage filesystem
+            ;;
+
+        mount)
+            installer_run_stage mount
+            ;;
+
+        packages|pkg)
+            installer_run_stage packages
+            ;;
+
+        users|user)
+            installer_run_stage users
+            ;;
+
+        desktop)
+            installer_run_stage desktop
+            ;;
+
+        services)
+            installer_run_stage services
+            ;;
+
+        bootloader|boot)
+            installer_run_stage bootloader
+            ;;
+
+        summary)
+            installer_run_stage summary
+            ;;
+
+        *)
+            installer_log_error \
+                "Unknown installer operation: ${operation:-<empty>}"
+
+            return 2
+            ;;
+    esac
+}
+
+#============================================================
+# Start main menu
+#============================================================
+
+installer_start_menu()
+{
+    if ! declare -F menu_main >/dev/null 2>&1
+    then
+        installer_log_error \
+            "menu_main() is not loaded"
+
+        return 127
+    fi
+
+    installer_log_info \
+        "Starting main installer menu"
+
+    if menu_main
+    then
+        return 0
+    fi
+
+    return $?
+}
+
+#============================================================
+# Controller entry point
+#============================================================
+
+installer_main()
+{
+    local operation="${1:-menu}"
+
+    case "$operation"
+    in
+        menu)
+            installer_start_menu
+            ;;
+
+        full|full_install|install)
+            installer_full_install
+            ;;
+
+        *)
+            installer_run "$operation"
+            ;;
+    esac
+}
+
+#============================================================
+# Public aliases
+#============================================================
+
+run_full_installation()
+{
+    installer_full_install "$@"
+}
+
+run_installation_stage()
+{
+    installer_run_stage "$@"
+}
+
+#============================================================
+# Direct execution
+#
+# Normally this file is SOURCED by install.sh.
+#
+# If somebody runs:
+#
+#   ./installer/installer.sh
+#
+# it will attempt to execute the requested operation.
+#============================================================
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]
+then
+    installer_main "$@"
+    exit $?
+fi
+```

@@ -1346,17 +1346,20 @@ event_read()
         return 1
     fi
 
-    case "$key" in
+    case "$key"
+    in
         $'\e')
             if ! IFS= read -rsn1 \
                 -t "$TUI_ESCAPE_TIMEOUT" \
                 key <&"$TUI_FD"
             then
                 TUI_EVENT="$EVENT_BACK"
+                printf '%s' "$TUI_EVENT"
                 return 0
             fi
 
-            case "$key" in
+            case "$key"
+            in
                 "[")
                     event_read_csi
                     ;;
@@ -1366,18 +1369,51 @@ event_read()
                         -t "$TUI_ESCAPE_TIMEOUT" \
                         ss3 <&"$TUI_FD"
                     then
-                        case "$ss3" in
-                            A) TUI_EVENT="$EVENT_UP" ;;
-                            B) TUI_EVENT="$EVENT_DOWN" ;;
-                            C) TUI_EVENT="$EVENT_RIGHT" ;;
-                            D) TUI_EVENT="$EVENT_LEFT" ;;
-                            H) TUI_EVENT="$EVENT_HOME" ;;
-                            F) TUI_EVENT="$EVENT_END" ;;
-                            P) TUI_EVENT="$EVENT_F1" ;;
-                            Q) TUI_EVENT="$EVENT_F2" ;;
-                            R) TUI_EVENT="$EVENT_F3" ;;
-                            S) TUI_EVENT="$EVENT_F4" ;;
-                            *) TUI_EVENT="$EVENT_NONE" ;;
+                        case "$ss3"
+                        in
+                            A)
+                                TUI_EVENT="$EVENT_UP"
+                                ;;
+
+                            B)
+                                TUI_EVENT="$EVENT_DOWN"
+                                ;;
+
+                            C)
+                                TUI_EVENT="$EVENT_RIGHT"
+                                ;;
+
+                            D)
+                                TUI_EVENT="$EVENT_LEFT"
+                                ;;
+
+                            H)
+                                TUI_EVENT="$EVENT_HOME"
+                                ;;
+
+                            F)
+                                TUI_EVENT="$EVENT_END"
+                                ;;
+
+                            P)
+                                TUI_EVENT="$EVENT_F1"
+                                ;;
+
+                            Q)
+                                TUI_EVENT="$EVENT_F2"
+                                ;;
+
+                            R)
+                                TUI_EVENT="$EVENT_F3"
+                                ;;
+
+                            S)
+                                TUI_EVENT="$EVENT_F4"
+                                ;;
+
+                            *)
+                                TUI_EVENT="$EVENT_NONE"
+                                ;;
                         esac
                     else
                         TUI_EVENT="$EVENT_NONE"
@@ -1416,9 +1452,20 @@ event_read()
             ;;
     esac
 
+    #
+    # IMPORTANT:
+    #
+    # menu_main.sh and several installer modules use:
+    #
+    #     event="$(event_read)"
+    #
+    # Therefore event_read() must return the event through
+    # stdout as well as store it in TUI_EVENT.
+    #
+    printf '%s' "$TUI_EVENT"
+
     return 0
 }
-
 event_get()
 {
     printf '%s' "$TUI_EVENT"

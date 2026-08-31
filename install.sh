@@ -421,20 +421,10 @@ detect_partition_table()
 
 load_core_libraries()
 {
+    require_lib logger.sh
     require_lib config.sh
-    require_lib utils.sh
-    require_lib terminal.sh
-    require_lib cursor.sh
-    require_lib colors.sh
-    require_lib unicode.sh
     require_lib tui.sh
-    require_lib screen.sh
-    require_lib draw.sh
-    require_lib input.sh
-    require_lib events.sh
-    require_lib widgets.sh
-    require_lib dialog.sh
-    require_lib progress.sh
+    require_lib common.sh
 
     logger_info \
         "Core libraries loaded"

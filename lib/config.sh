@@ -1,30 +1,30 @@
+```bash
 #!/usr/bin/env bash
 #
 #============================================================
 # Arch Installer
 #------------------------------------------------------------
-# config.sh
+# lib/config.sh
 #
-# Центральное состояние и конфигурация установщика.
+# Центральное хранилище конфигурации installer.
 #
 # Ответственность:
-#   • Значения конфигурации
-#   • Значения по умолчанию
-#   • Boot mode
-#   • Target disk
-#   • Partition information
-#   • Filesystem configuration
-#   • System configuration
-#   • User configuration
-#   • Validation
+#   • хранение CONFIG[]
+#   • значения по умолчанию
+#   • чтение/запись конфигурации
+#   • сохранение конфигурации
+#   • загрузка конфигурации
+#   • экспорт переменных
+#   • сброс конфигурации
+#   • валидация
 #
-# Не содержит:
+# Не выполняет:
 #   • TUI
-#   • partition commands
-#   • mkfs
-#   • mount
-#   • pacstrap
-#   • bootloader installation
+#   • разметку дисков
+#   • форматирование
+#   • монтирование
+#   • установку пакетов
+#   • настройку systemd
 #
 #============================================================
 
@@ -36,257 +36,603 @@ fi
 readonly CONFIG_SH_LOADED=1
 
 #============================================================
-# Configuration state
+# Configuration file
 #============================================================
 
-CONFIG_INITIALIZED=0
-CONFIG_VALID=0
+CONFIG_FILE="${CONFIG_FILE:-/tmp/arch-installer.conf}"
 
 #============================================================
-# Target disk
+# Configuration storage
 #============================================================
 
-TARGET_DISK=""
-TARGET_DISK_MODEL=""
-TARGET_DISK_SERIAL=""
-TARGET_DISK_TRAN=""
-TARGET_DISK_SIZE=""
-TARGET_DISK_SECTOR_SIZE=""
+declare -gA CONFIG=()
 
 #============================================================
-# Partitions
+# Configuration keys
 #============================================================
 
-BOOT_PARTITION=""
-ROOT_PARTITION=""
-SWAP_PARTITION=""
+declare -ga CONFIG_KEYS=(
+    BOOT_MODE
+    PARTITION_TABLE
 
-BOOT_PARTITION_NUMBER=""
-ROOT_PARTITION_NUMBER=""
-SWAP_PARTITION_NUMBER=""
+    TARGET_DISK
+    TARGET_DISK_SIZE
+    TARGET_DISK_MODEL
+    TARGET_DISK_SERIAL
+    TARGET_DISK_TRAN
 
-#============================================================
-# Filesystems
-#============================================================
+    EFI_PART
+    BIOS_PART
+    ROOT_PART
+    HOME_PART
+    SWAP_PART
 
-BOOT_FS="fat32"
-ROOT_FS="ext4"
-SWAP_FS="swap"
+    FILESYSTEM
 
-SWAP_ENABLED=0
+    CREATE_HOME
+    HOME_SIZE
 
-#============================================================
-# Mount
-#============================================================
+    SWAP_TYPE
+    SWAP_SIZE
+    SWAP_FILE
 
-TARGET_MOUNT="/mnt"
+    SYSTEM_KEYMAP
+    LOCALES
+    LOCALE
 
-ROOT_MOUNT="/mnt"
-BOOT_MOUNT="/mnt/boot"
+    NETWORK_INTERFACE
+    NETWORK_ENABLED
 
-#============================================================
-# Boot mode
-#============================================================
+    INSTALL_REFLECTOR
 
-BOOT_MODE=""
+    MIRROR_COUNTRY
+    MIRROR_LATEST
+    MIRROR_AGE
+    MIRROR_PROTOCOL
+    MIRROR_SORT
 
-BOOT_UEFI=0
-BOOT_BIOS=0
+    USER_NAME
+    HOSTNAME
 
-#============================================================
-# EFI
-#============================================================
+    SSH_ENABLED
 
-EFI_SIZE_MIB=512
-
-#============================================================
-# System
-#============================================================
-
-HOSTNAME="archlinux"
-
-TIMEZONE="UTC"
-
-LOCALE="en_US.UTF-8"
-
-KEYMAP="us"
-
-#============================================================
-# User
-#============================================================
-
-USERNAME=""
-
-USER_SHELL="/bin/bash"
-
-#============================================================
-# Installation options
-#============================================================
-
-INSTALL_NETWORK=1
-INSTALL_EDITOR=1
-INSTALL_BOOTLOADER=1
-
-AUTO_REBOOT=0
-
-CONFIRM_DESTRUCTIVE=1
-
-#============================================================
-# Package lists
-#============================================================
-
-BASE_PACKAGES=(
-    base
-    linux
-    linux-firmware
-)
-
-NETWORK_PACKAGES=(
-    networkmanager
-)
-
-EDITOR_PACKAGES=(
-    nano
-)
-
-BOOT_PACKAGES=(
-    grub
-)
-
-UEFI_PACKAGES=(
-    efibootmgr
+    DESKTOP
+    GPU_DRIVER
+    BOOTLOADER
 )
 
 #============================================================
-# Defaults
+# Internal logging helpers
 #============================================================
 
-config_defaults()
+config_log_error()
 {
-    TARGET_MOUNT="/mnt"
-
-    ROOT_MOUNT="$TARGET_MOUNT"
-    BOOT_MOUNT="$TARGET_MOUNT/boot"
-
-    BOOT_FS="fat32"
-    ROOT_FS="ext4"
-    SWAP_FS="swap"
-
-    SWAP_ENABLED=0
-
-    HOSTNAME="archlinux"
-
-    TIMEZONE="UTC"
-
-    LOCALE="en_US.UTF-8"
-
-    KEYMAP="us"
-
-    USER_SHELL="/bin/bash"
-
-    INSTALL_NETWORK=1
-    INSTALL_EDITOR=1
-    INSTALL_BOOTLOADER=1
-
-    AUTO_REBOOT=0
-    CONFIRM_DESTRUCTIVE=1
-
-    return 0
-}
-
-#============================================================
-# Detect boot mode
-#============================================================
-
-config_detect_boot_mode()
-{
-    BOOT_MODE=""
-    BOOT_UEFI=0
-    BOOT_BIOS=0
-
-    if [[ -d /sys/firmware/efi ]]
+    if declare -F logger_error >/dev/null 2>&1
     then
-        BOOT_MODE="UEFI"
-        BOOT_UEFI=1
+        logger_error "$@"
     else
-        BOOT_MODE="BIOS"
-        BOOT_BIOS=1
+        printf 'CONFIG ERROR: %s\n' "$*" >&2
     fi
+}
 
-    logger_info \
-        "Boot mode: $BOOT_MODE"
+config_log_warn()
+{
+    if declare -F logger_warn >/dev/null 2>&1
+    then
+        logger_warn "$@"
+    else
+        printf 'CONFIG WARN: %s\n' "$*" >&2
+    fi
+}
+
+config_log_info()
+{
+    if declare -F logger_info >/dev/null 2>&1
+    then
+        logger_info "$@"
+    fi
+}
+
+config_log_debug()
+{
+    if declare -F logger_debug >/dev/null 2>&1
+    then
+        logger_debug "$@"
+    fi
+}
+
+#============================================================
+# Validate key
+#============================================================
+
+config_valid_key()
+{
+    local key="${1:-}"
+
+    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]]
+}
+
+#============================================================
+# Require valid key
+#============================================================
+
+config_require_key()
+{
+    local key="${1:-}"
+
+    if ! config_valid_key "$key"
+    then
+        config_log_error \
+            "Invalid configuration key: ${key}"
+
+        return 1
+    fi
 
     return 0
 }
 
 #============================================================
-# Validate boolean
+# Initialize defaults
 #============================================================
 
-config_validate_bool()
+config_init()
 {
-    local name="$1"
-    local value="${!name}"
+    CONFIG=()
 
-    if [[ "$value" != 0 && "$value" != 1 ]]
-    then
-        logger_error \
-            "Config: $name must be 0 or 1"
+    CONFIG[BOOT_MODE]=""
+    CONFIG[PARTITION_TABLE]=""
 
-        return 1
-    fi
+    CONFIG[TARGET_DISK]=""
+    CONFIG[TARGET_DISK_SIZE]=""
+    CONFIG[TARGET_DISK_MODEL]=""
+    CONFIG[TARGET_DISK_SERIAL]=""
+    CONFIG[TARGET_DISK_TRAN]=""
+
+    CONFIG[EFI_PART]=""
+    CONFIG[BIOS_PART]=""
+    CONFIG[ROOT_PART]=""
+    CONFIG[HOME_PART]=""
+    CONFIG[SWAP_PART]=""
+
+    CONFIG[FILESYSTEM]="ext4"
+
+    CONFIG[CREATE_HOME]="0"
+    CONFIG[HOME_SIZE]=""
+
+    CONFIG[SWAP_TYPE]="none"
+    CONFIG[SWAP_SIZE]=""
+    CONFIG[SWAP_FILE]=""
+
+    CONFIG[SYSTEM_KEYMAP]="us"
+    CONFIG[LOCALES]="en_US.UTF-8"
+    CONFIG[LOCALE]="en_US.UTF-8"
+
+    CONFIG[NETWORK_INTERFACE]=""
+    CONFIG[NETWORK_ENABLED]="0"
+
+    CONFIG[INSTALL_REFLECTOR]="0"
+
+    CONFIG[MIRROR_COUNTRY]=""
+    CONFIG[MIRROR_LATEST]="10"
+    CONFIG[MIRROR_AGE]="24"
+    CONFIG[MIRROR_PROTOCOL]="https"
+    CONFIG[MIRROR_SORT]="rate"
+
+    CONFIG[USER_NAME]="user"
+    CONFIG[HOSTNAME]="archlinux"
+
+    CONFIG[SSH_ENABLED]="0"
+
+    CONFIG[DESKTOP]=""
+    CONFIG[GPU_DRIVER]=""
+    CONFIG[BOOTLOADER]=""
+
+    config_log_debug \
+        "Configuration initialized"
 
     return 0
 }
 
 #============================================================
-# Validate hostname
+# Get value
 #============================================================
 
-config_validate_hostname()
+config_get()
 {
-    if [[ -z "$HOSTNAME" ]]
+    local key="${1:-}"
+
+    config_require_key "$key" || return 1
+
+    if [[ ! -v "CONFIG[$key]" ]]
     then
-        logger_error \
-            "Config: hostname is empty"
+        config_log_error \
+            "Configuration key is not initialized: ${key}"
 
         return 1
     fi
 
-    if (( ${#HOSTNAME} > 253 ))
-    then
-        logger_error \
-            "Config: hostname is too long"
+    printf '%s' "${CONFIG[$key]}"
+}
 
-        return 1
-    fi
+#============================================================
+# Set value
+#============================================================
 
-    if [[ ! "$HOSTNAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
-    then
-        logger_error \
-            "Config: invalid hostname: $HOSTNAME"
+config_set()
+{
+    local key="${1:-}"
+    local value="${2-}"
 
-        return 1
-    fi
+    config_require_key "$key" || return 1
+
+    CONFIG["$key"]="$value"
 
     return 0
 }
 
 #============================================================
-# Validate locale
+# Check key
 #============================================================
 
-config_validate_locale()
+config_exists()
 {
-    if [[ -z "$LOCALE" ]]
+    local key="${1:-}"
+
+    config_require_key "$key" || return 1
+
+    [[ -v "CONFIG[$key]" ]]
+}
+
+#============================================================
+# Clear value
+#============================================================
+
+config_unset()
+{
+    local key="${1:-}"
+
+    config_require_key "$key" || return 1
+
+    CONFIG["$key"]=""
+
+    return 0
+}
+
+#============================================================
+# Encode value
+#============================================================
+
+config_encode()
+{
+    local value="${1-}"
+
+    if command -v base64 >/dev/null 2>&1
     then
-        logger_error \
-            "Config: locale is empty"
+        printf '%s' "$value" |
+            base64 -w 0
+    else
+        config_log_error \
+            "base64 command is unavailable"
+
+        return 1
+    fi
+}
+
+#============================================================
+# Decode value
+#============================================================
+
+config_decode()
+{
+    local value="${1-}"
+
+    if command -v base64 >/dev/null 2>&1
+    then
+        printf '%s' "$value" |
+            base64 -d 2>/dev/null
+    else
+        config_log_error \
+            "base64 command is unavailable"
+
+        return 1
+    fi
+}
+
+#============================================================
+# Save configuration
+#============================================================
+
+config_save()
+{
+    local key
+    local encoded
+    local tmp_file
+
+    tmp_file="${CONFIG_FILE}.tmp.$$"
+
+    config_log_info \
+        "Saving configuration: ${CONFIG_FILE}"
+
+    if ! {
+        printf '%s\n' \
+            '# Arch Installer configuration'
+
+        printf '%s\n' \
+            '# Generated automatically'
+
+        printf '%s\n' \
+            '# Values are base64 encoded'
+
+        printf '%s\n' \
+            ''
+
+        for key in "${CONFIG_KEYS[@]}"
+        do
+            if [[ ! -v "CONFIG[$key]" ]]
+            then
+                CONFIG["$key"]=""
+            fi
+
+            encoded="$(
+                config_encode \
+                    "${CONFIG[$key]}"
+            )" || return 1
+
+            printf '%s=%s\n' \
+                "$key" \
+                "$encoded"
+        done
+    } > "$tmp_file"
+    then
+        config_log_error \
+            "Failed writing temporary configuration"
+
+        rm -f "$tmp_file"
 
         return 1
     fi
 
+    if ! chmod 600 "$tmp_file"
+    then
+        config_log_error \
+            "Failed setting configuration permissions"
+
+        rm -f "$tmp_file"
+
+        return 1
+    fi
+
+    if ! mv -f "$tmp_file" "$CONFIG_FILE"
+    then
+        config_log_error \
+            "Failed installing configuration file"
+
+        rm -f "$tmp_file"
+
+        return 1
+    fi
+
+    config_log_info \
+        "Configuration saved"
+
     return 0
+}
+
+#============================================================
+# Load configuration
+#============================================================
+
+config_load()
+{
+    local line
+    local key
+    local encoded
+    local value
+
+    if [[ ! -f "$CONFIG_FILE" ]]
+    then
+        config_log_debug \
+            "Configuration file does not exist: ${CONFIG_FILE}"
+
+        return 0
+    fi
+
+    config_log_info \
+        "Loading configuration: ${CONFIG_FILE}"
+
+    while IFS= read -r line || [[ -n "$line" ]]
+    do
+        [[ -z "$line" ]] && continue
+        [[ "$line" == \#* ]] && continue
+
+        if [[ "$line" != *=* ]]
+        then
+            config_log_warn \
+                "Ignoring malformed configuration line"
+
+            continue
+        fi
+
+        key="${line%%=*}"
+        encoded="${line#*=}"
+
+        if ! config_valid_key "$key"
+        then
+            config_log_warn \
+                "Ignoring invalid configuration key: ${key}"
+
+            continue
+        fi
+
+        if [[ ! "$encoded" =~ ^[A-Za-z0-9+/]*={0,2}$ ]]
+        then
+            config_log_warn \
+                "Ignoring invalid encoded value for: ${key}"
+
+            continue
+        fi
+
+        if ! value="$(
+            config_decode "$encoded"
+        )"
+        then
+            config_log_warn \
+                "Failed decoding configuration key: ${key}"
+
+            continue
+        fi
+
+        if [[ -v "CONFIG[$key]" ]]
+        then
+            CONFIG["$key"]="$value"
+        else
+            config_log_warn \
+                "Ignoring unknown configuration key: ${key}"
+        fi
+
+    done < "$CONFIG_FILE"
+
+    config_log_info \
+        "Configuration loaded"
+
+    return 0
+}
+
+#============================================================
+# Initialize and load
+#============================================================
+
+config_init_load()
+{
+    config_init || return 1
+
+    config_load || return 1
+
+    return 0
+}
+
+#============================================================
+# Export
+#============================================================
+
+config_export()
+{
+    local key
+
+    for key in "${CONFIG_KEYS[@]}"
+    do
+        printf -v \
+            "$key" \
+            '%s' \
+            "${CONFIG[$key]}"
+
+        export "$key"
+    done
+
+    return 0
+}
+
+#============================================================
+# Dump
+#============================================================
+
+config_dump()
+{
+    local key
+
+    printf '%s\n' \
+        'Installer configuration'
+
+    printf '%s\n' \
+        '-----------------------'
+
+    for key in "${CONFIG_KEYS[@]}"
+    do
+        printf '%-24s : %s\n' \
+            "$key" \
+            "${CONFIG[$key]}"
+    done
+}
+
+#============================================================
+# Reset
+#============================================================
+
+config_reset()
+{
+    config_log_warn \
+        "Resetting configuration"
+
+    config_init
+}
+
+#============================================================
+# Validation helpers
+#============================================================
+
+config_has_target_disk()
+{
+    [[ -n "$(config_get TARGET_DISK)" ]]
+}
+
+config_has_root()
+{
+    [[ -n "$(config_get ROOT_PART)" ]]
+}
+
+config_has_home()
+{
+    [[ -n "$(config_get HOME_PART)" ]]
+}
+
+config_has_efi()
+{
+    [[ -n "$(config_get EFI_PART)" ]]
+}
+
+config_has_user()
+{
+    [[ -n "$(config_get USER_NAME)" ]]
+}
+
+#============================================================
+# Validate boot mode
+#============================================================
+
+config_validate_boot_mode()
+{
+    case "$(config_get BOOT_MODE)"
+    in
+        UEFI|BIOS)
+            return 0
+            ;;
+        *)
+            config_log_error \
+                "Invalid BOOT_MODE"
+
+            return 1
+            ;;
+    esac
+}
+
+#============================================================
+# Validate partition table
+#============================================================
+
+config_validate_partition_table()
+{
+    case "$(config_get PARTITION_TABLE)"
+    in
+        GPT|MBR)
+            return 0
+            ;;
+        *)
+            config_log_error \
+                "Invalid PARTITION_TABLE"
+
+            return 1
+            ;;
+    esac
 }
 
 #============================================================
@@ -295,495 +641,258 @@ config_validate_locale()
 
 config_validate_filesystem()
 {
-    case "$ROOT_FS"
+    case "$(config_get FILESYSTEM)"
     in
         ext4|btrfs|xfs|f2fs)
+            return 0
             ;;
-
         *)
-            logger_error \
-                "Config: unsupported root filesystem: $ROOT_FS"
+            config_log_error \
+                "Invalid FILESYSTEM"
 
             return 1
             ;;
     esac
+}
 
-    case "$BOOT_FS"
+#============================================================
+# Validate swap
+#============================================================
+
+config_validate_swap()
+{
+    case "$(config_get SWAP_TYPE)"
     in
-        fat32|vfat)
+        none|partition|file)
+            return 0
             ;;
-
         *)
-            logger_error \
-                "Config: unsupported boot filesystem: $BOOT_FS"
+            config_log_error \
+                "Invalid SWAP_TYPE"
 
             return 1
             ;;
     esac
-
-    return 0
 }
 
 #============================================================
-# Validate mount point
+# Validate boolean
 #============================================================
 
-config_validate_mount()
+config_validate_boolean()
 {
-    if [[ -z "$TARGET_MOUNT" ]]
-    then
-        logger_error \
-            "Config: TARGET_MOUNT is empty"
+    local key="${1:-}"
+    local value
 
-        return 1
-    fi
+    value="$(config_get "$key")" || return 1
 
-    if [[ "$TARGET_MOUNT" != /* ]]
-    then
-        logger_error \
-            "Config: TARGET_MOUNT must be absolute"
+    case "$value"
+    in
+        0|1)
+            return 0
+            ;;
+        *)
+            config_log_error \
+                "Invalid boolean ${key}: ${value}"
 
-        return 1
-    fi
-
-    return 0
+            return 1
+            ;;
+    esac
 }
 
 #============================================================
-# Validate shell
+# Validate username
 #============================================================
 
-config_validate_shell()
+config_validate_user()
 {
-    if [[ "$USER_SHELL" != /* ]]
-    then
-        logger_error \
-            "Config: USER_SHELL must be an absolute path"
+    local user
 
+    user="$(config_get USER_NAME)" || return 1
+
+    if [[ -z "$user" ]]
+    then
         return 1
     fi
+
+    [[ "$user" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]
+}
+
+#============================================================
+# Validate hostname
+#============================================================
+
+config_validate_hostname()
+{
+    local hostname
+    local label
+    local labels
+
+    hostname="$(config_get HOSTNAME)" || return 1
+
+    if [[ -z "$hostname" ]]
+    then
+        return 1
+    fi
+
+    if (( ${#hostname} > 253 ))
+    then
+        return 1
+    fi
+
+    if [[ "$hostname" =~ [^A-Za-z0-9.-] ]]
+    then
+        return 1
+    fi
+
+    if [[ "$hostname" == .* ||
+          "$hostname" == *. ]]
+    then
+        return 1
+    fi
+
+    IFS='.' read -ra labels <<< "$hostname"
+
+    for label in "${labels[@]}"
+    do
+        if [[ -z "$label" ]]
+        then
+            return 1
+        fi
+
+        if (( ${#label} > 63 ))
+        then
+            return 1
+        fi
+
+        if [[ "$label" == -* ||
+              "$label" == *- ]]
+        then
+            return 1
+        fi
+    done
 
     return 0
 }
 
 #============================================================
-# Validate static configuration
+# Validate desktop
+#============================================================
+
+config_validate_desktop()
+{
+    case "$(config_get DESKTOP)"
+    in
+        ""|gnome|kde|xfce)
+            return 0
+            ;;
+        *)
+            config_log_error \
+                "Invalid DESKTOP"
+
+            return 1
+            ;;
+    esac
+}
+
+#============================================================
+# Validate bootloader
+#============================================================
+
+config_validate_bootloader()
+{
+    case "$(config_get BOOTLOADER)"
+    in
+        ""|grub|systemd-boot)
+            return 0
+            ;;
+        *)
+            config_log_error \
+                "Invalid BOOTLOADER"
+
+            return 1
+            ;;
+    esac
+}
+
+#============================================================
+# Full validation
 #============================================================
 
 config_validate()
 {
-    CONFIG_VALID=0
-
-    logger_debug \
-        "Validating configuration"
-
-    #
-    # Boolean options.
-    #
-    config_validate_bool INSTALL_NETWORK || return 1
-    config_validate_bool INSTALL_EDITOR || return 1
-    config_validate_bool INSTALL_BOOTLOADER || return 1
-    config_validate_bool AUTO_REBOOT || return 1
-    config_validate_bool CONFIRM_DESTRUCTIVE || return 1
-    config_validate_bool SWAP_ENABLED || return 1
-
-    #
-    # Filesystem.
-    #
+    config_validate_boot_mode || return 1
+    config_validate_partition_table || return 1
     config_validate_filesystem || return 1
+    config_validate_swap || return 1
 
-    #
-    # Mount.
-    #
-    config_validate_mount || return 1
+    config_validate_boolean \
+        CREATE_HOME || return 1
 
-    #
-    # Hostname.
-    #
-    config_validate_hostname || return 1
+    config_validate_boolean \
+        NETWORK_ENABLED || return 1
 
-    #
-    # Locale.
-    #
-    config_validate_locale || return 1
+    config_validate_boolean \
+        INSTALL_REFLECTOR || return 1
 
-    #
-    # Shell.
-    #
-    config_validate_shell || return 1
+    config_validate_boolean \
+        SSH_ENABLED || return 1
 
-    CONFIG_VALID=1
+    config_validate_user || {
+        config_log_error \
+            "Invalid USER_NAME"
 
-    logger_debug \
-        "Configuration valid"
+        return 1
+    }
 
-    return 0
-}
+    config_validate_hostname || {
+        config_log_error \
+            "Invalid HOSTNAME"
 
-#============================================================
-# Initialization
-#============================================================
+        return 1
+    }
 
-config_init()
-{
-    if (( CONFIG_INITIALIZED ))
+    config_validate_desktop || return 1
+    config_validate_bootloader || return 1
+
+    if [[ "$(config_get BOOT_MODE)" == "UEFI" &&
+          "$(config_get PARTITION_TABLE)" != "GPT" ]]
     then
-        return 0
-    fi
-
-    logger_debug \
-        "Initializing configuration"
-
-    config_defaults
-
-    config_detect_boot_mode
-
-    if ! config_validate
-    then
-        logger_error \
-            "Configuration initialization failed"
-
-        CONFIG_VALID=0
+        config_log_error \
+            "UEFI requires GPT"
 
         return 1
     fi
 
-    CONFIG_INITIALIZED=1
-
-    logger_info \
-        "Configuration initialized"
-
-    return 0
-}
-
-#============================================================
-# Set target disk
-#============================================================
-
-config_set_disk()
-{
-    local disk="${1:-}"
-
-    if [[ -z "$disk" ]]
+    if [[ "$(config_get BOOT_MODE)" == "BIOS" &&
+          "$(config_get PARTITION_TABLE)" != "MBR" ]]
     then
-        logger_error \
-            "Config: disk is empty"
+        config_log_error \
+            "BIOS requires MBR"
 
         return 1
     fi
 
-    if [[ ! -b "$disk" ]]
+    if [[ "$(config_get CREATE_HOME)" == "1" &&
+          -z "$(config_get HOME_SIZE)" ]]
     then
-        logger_error \
-            "Config: not a block device: $disk"
+        config_log_error \
+            "HOME_SIZE is required when CREATE_HOME=1"
 
         return 1
     fi
 
-    TARGET_DISK="$disk"
-
-    return 0
-}
-
-#============================================================
-# Set disk information
-#============================================================
-
-config_set_disk_info()
-{
-    local model="${1-}"
-    local serial="${2-}"
-    local tran="${3-}"
-    local size="${4-}"
-    local sector_size="${5-}"
-
-    TARGET_DISK_MODEL="$model"
-    TARGET_DISK_SERIAL="$serial"
-    TARGET_DISK_TRAN="$tran"
-    TARGET_DISK_SIZE="$size"
-    TARGET_DISK_SECTOR_SIZE="$sector_size"
-
-    return 0
-}
-
-#============================================================
-# Set partitions
-#============================================================
-
-config_set_partitions()
-{
-    local boot="${1:-}"
-    local root="${2:-}"
-    local swap="${3-}"
-
-    if [[ -z "$boot" ]]
+    if [[ "$(config_get SWAP_TYPE)" == "partition" &&
+          -z "$(config_get SWAP_SIZE)" ]]
     then
-        logger_error \
-            "Config: boot partition is empty"
+        config_log_error \
+            "SWAP_SIZE is required for partition swap"
 
         return 1
     fi
 
-    if [[ -z "$root" ]]
-    then
-        logger_error \
-            "Config: root partition is empty"
-
-        return 1
-    fi
-
-    BOOT_PARTITION="$boot"
-    ROOT_PARTITION="$root"
-    SWAP_PARTITION="$swap"
-
-    return 0
-}
-
-#============================================================
-# Set partition numbers
-#============================================================
-
-config_set_partition_numbers()
-{
-    BOOT_PARTITION_NUMBER="${1-}"
-    ROOT_PARTITION_NUMBER="${2-}"
-    SWAP_PARTITION_NUMBER="${3-}"
-
-    return 0
-}
-
-#============================================================
-# Set filesystem
-#============================================================
-
-config_set_root_fs()
-{
-    local filesystem="${1:-}"
-
-    case "$filesystem"
-    in
-        ext4|btrfs|xfs|f2fs)
-            ROOT_FS="$filesystem"
-            ;;
-
-        *)
-            logger_error \
-                "Config: unsupported filesystem: $filesystem"
-
-            return 1
-            ;;
-    esac
-
-    return 0
-}
-
-#============================================================
-# Set hostname
-#============================================================
-
-config_set_hostname()
-{
-    local hostname="${1:-}"
-
-    HOSTNAME="$hostname"
-
-    config_validate_hostname
-}
-
-#============================================================
-# Set timezone
-#============================================================
-
-config_set_timezone()
-{
-    local timezone="${1:-}"
-
-    if [[ -z "$timezone" ]]
-    then
-        logger_error \
-            "Config: timezone is empty"
-
-        return 1
-    fi
-
-    TIMEZONE="$timezone"
-
-    return 0
-}
-
-#============================================================
-# Set locale
-#============================================================
-
-config_set_locale()
-{
-    local locale="${1:-}"
-
-    if [[ -z "$locale" ]]
-    then
-        logger_error \
-            "Config: locale is empty"
-
-        return 1
-    fi
-
-    LOCALE="$locale"
-
-    return 0
-}
-
-#============================================================
-# Set keymap
-#============================================================
-
-config_set_keymap()
-{
-    local keymap="${1:-}"
-
-    if [[ -z "$keymap" ]]
-    then
-        logger_error \
-            "Config: keymap is empty"
-
-        return 1
-    fi
-
-    KEYMAP="$keymap"
-
-    return 0
-}
-
-#============================================================
-# Set username
-#============================================================
-
-config_set_username()
-{
-    local username="${1:-}"
-
-    if [[ -z "$username" ]]
-    then
-        logger_error \
-            "Config: username is empty"
-
-        return 1
-    fi
-
-    if [[ ! "$username" =~ ^[a-z_][a-z0-9_-]*$ ]]
-    then
-        logger_error \
-            "Config: invalid username: $username"
-
-        return 1
-    fi
-
-    USERNAME="$username"
-
-    return 0
-}
-
-#============================================================
-# Check target disk
-#============================================================
-
-config_require_disk()
-{
-    if [[ -z "$TARGET_DISK" ]]
-    then
-        logger_error \
-            "Config: target disk has not been selected"
-
-        return 1
-    fi
-
-    if [[ ! -b "$TARGET_DISK" ]]
-    then
-        logger_error \
-            "Config: target disk is not a block device: $TARGET_DISK"
-
-        return 1
-    fi
-
-    return 0
-}
-
-#============================================================
-# Check partitions
-#============================================================
-
-config_require_partitions()
-{
-    if [[ -z "$ROOT_PARTITION" ]]
-    then
-        logger_error \
-            "Config: root partition is not configured"
-
-        return 1
-    fi
-
-    if [[ "$BOOT_MODE" == "UEFI" &&
-          -z "$BOOT_PARTITION" ]]
-    then
-        logger_error \
-            "Config: EFI partition is not configured"
-
-        return 1
-    fi
-
-    return 0
-}
-
-#============================================================
-# Configuration summary
-#============================================================
-
-config_summary()
-{
-    printf '%s\n' \
-        "========================================" \
-        " Arch Installer configuration" \
-        "========================================" \
-        "Target disk : ${TARGET_DISK:-<not selected>}" \
-        "Model       : ${TARGET_DISK_MODEL:-<unknown>}" \
-        "Serial      : ${TARGET_DISK_SERIAL:-<unknown>}" \
-        "Transport   : ${TARGET_DISK_TRAN:-<unknown>}" \
-        "Size        : ${TARGET_DISK_SIZE:-<unknown>}" \
-        "Boot mode   : ${BOOT_MODE:-<unknown>}" \
-        "Boot part.  : ${BOOT_PARTITION:-<not configured>}" \
-        "Root part.  : ${ROOT_PARTITION:-<not configured>}" \
-        "Swap part.  : ${SWAP_PARTITION:-<disabled>}" \
-        "Boot FS     : ${BOOT_FS}" \
-        "Root FS     : ${ROOT_FS}" \
-        "Mount       : ${TARGET_MOUNT}" \
-        "Hostname    : ${HOSTNAME}" \
-        "Timezone    : ${TIMEZONE}" \
-        "Locale      : ${LOCALE}" \
-        "Keymap      : ${KEYMAP}" \
-        "Username    : ${USERNAME:-<not configured>}" \
-        "========================================"
-}
-
-#============================================================
-# Reset runtime installation state
-#============================================================
-
-config_reset_install_state()
-{
-    TARGET_DISK=""
-
-    TARGET_DISK_MODEL=""
-    TARGET_DISK_SERIAL=""
-    TARGET_DISK_TRAN=""
-    TARGET_DISK_SIZE=""
-    TARGET_DISK_SECTOR_SIZE=""
-
-    BOOT_PARTITION=""
-    ROOT_PARTITION=""
-    SWAP_PARTITION=""
-
-    BOOT_PARTITION_NUMBER=""
-    ROOT_PARTITION_NUMBER=""
-    SWAP_PARTITION_NUMBER=""
+    config_log_info \
+        "Configuration validation passed"
 
     return 0
 }
@@ -791,3 +900,4 @@ config_reset_install_state()
 #============================================================
 # End
 #============================================================
+```

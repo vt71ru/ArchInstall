@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
 #============================================================
-# Arch Installer
+#  Arch Installer
 #------------------------------------------------------------
-# installer.sh
+#  installer.sh
 #
-# Центральный controller установки.
+#  Центральный controller установки.
 #
-# Ответственность:
+#  Ответственность:
 #   • загрузка installer-модулей
 #   • проверка entry point
 #   • выполнение отдельных этапов
@@ -15,17 +15,23 @@
 #   • контроль порядка этапов
 #   • возврат кодов ошибок
 #
-# Не содержит:
+#  НЕ содержит:
 #   • TTY logic
-#   • stty
-#   • keyboard handling
+#   • keyboard parsing
 #   • drawing
-#   • partition implementation
-#   • filesystem implementation
-#   • mount implementation
-#   • package implementation
-#   • bootloader implementation
+#   • partition logic
+#   • filesystem logic
+#   • mount logic
+#   • package logic
+#   • bootloader logic
 #
+#  API installer-модулей:
+#
+#       partition.sh    -> partition_main()
+#       filesystem.sh   -> filesystem_main()
+#       mount.sh        -> mount_main()
+#       packages.sh     -> packages_main()
+#       bootloader.sh   -> bootloader_main()
 #============================================================
 
 if [[ -n "${INSTALLER_SH_LOADED:-}" ]]
@@ -36,37 +42,26 @@ fi
 readonly INSTALLER_SH_LOADED=1
 
 #============================================================
-# Requirements
-#============================================================
-
-: "${INSTALLER_ROOT:?INSTALLER_ROOT is not set}"
-
-#============================================================
-# Paths
-#============================================================
-
-INSTALLER_DIR="$INSTALLER_ROOT/installer"
-
-readonly INSTALLER_DIR
-
-#============================================================
-# State
+# Runtime state
 #============================================================
 
 INSTALLER_STAGE="idle"
 INSTALLER_LAST_RC=0
 
 #============================================================
-# Internal logging
+# Logging helpers
 #============================================================
 
-installer_log_error()
+installer_log_info()
 {
-    if declare -F logger_error >/dev/null 2>&1
+    if declare -F logger_info >/dev/null 2>&1
     then
-        logger_error "$@"
+        logger_info "$@"
     else
-        printf '[INSTALLER] [ERROR] %s\n' "$*" >&2
+        printf \
+            '[INSTALLER] [INFO] %s\n' \
+            "$*" \
+            >&2
     fi
 }
 
@@ -76,15 +71,23 @@ installer_log_warn()
     then
         logger_warn "$@"
     else
-        printf '[INSTALLER] [WARN] %s\n' "$*" >&2
+        printf \
+            '[INSTALLER] [WARN] %s\n' \
+            "$*" \
+            >&2
     fi
 }
 
-installer_log_info()
+installer_log_error()
 {
-    if declare -F logger_info >/dev/null 2>&1
+    if declare -F logger_error >/dev/null 2>&1
     then
-        logger_info "$@"
+        logger_error "$@"
+    else
+        printf \
+            '[INSTALLER] [ERROR] %s\n' \
+            "$*" \
+            >&2
     fi
 }
 
@@ -97,82 +100,51 @@ installer_log_debug()
 }
 
 #============================================================
-# Load module
+# Check installer module
 #============================================================
 
 installer_load_module()
 {
     local module="${1:-}"
-    local file=""
-
-    #--------------------------------------------------------
-    # Validate module name
-    #--------------------------------------------------------
+    local root
+    local file
 
     if [[ -z "$module" ]]
     then
         installer_log_error \
-            "Installer: module name is empty"
+            "Installer module name is empty"
 
         return 1
     fi
 
-    #--------------------------------------------------------
-    # Prevent path traversal
-    #--------------------------------------------------------
+    root="${INSTALLER_ROOT:-}"
 
-    case "$module"
-    in
-        /*|../*|*/../*|..)
-            installer_log_error \
-                "Installer: invalid module path: $module"
+    if [[ -z "$root" ]]
+    then
+        root="$(
+            cd "$(dirname "${BASH_SOURCE[0]}")" &&
+            pwd
+        )"
+    fi
 
-            return 1
-            ;;
-    esac
-
-    #--------------------------------------------------------
-    # Build path
-    #--------------------------------------------------------
-
-    file="$INSTALLER_DIR/$module"
-
-    #--------------------------------------------------------
-    # Check file
-    #--------------------------------------------------------
+    file="${root}/${module}"
 
     if [[ ! -f "$file" ]]
     then
         installer_log_error \
-            "Installer: module not found: $file"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Load module
-    #--------------------------------------------------------
-
-    installer_log_debug \
-        "Installer: loading module: $module"
-
-    # shellcheck disable=SC1090
-    if ! source "$file"
-    then
-        installer_log_error \
-            "Installer: failed to load module: $file"
+            "Installer module not found: ${file}"
 
         return 1
     fi
 
     installer_log_debug \
-        "Installer: module loaded: $module"
+        "Installer module already expected to be loaded: ${module}"
 
     return 0
 }
 
 #============================================================
-# Check function
+# Require function
 #============================================================
 
 installer_require_function()
@@ -182,7 +154,7 @@ installer_require_function()
     if [[ -z "$function_name" ]]
     then
         installer_log_error \
-            "Installer: function name is empty"
+            "Entry point name is empty"
 
         return 1
     fi
@@ -190,7 +162,7 @@ installer_require_function()
     if ! declare -F "$function_name" >/dev/null 2>&1
     then
         installer_log_error \
-            "Installer: required function not found: $function_name"
+            "Required installer entry point is missing: ${function_name}"
 
         return 1
     fi
@@ -199,37 +171,21 @@ installer_require_function()
 }
 
 #============================================================
-# Run stage
+# Run one installation stage
 #============================================================
 
 installer_run_stage()
 {
     local stage="${1:-}"
-    local module="${2:-}"
-    local function_name="${3:-}"
-    local rc=0
+    local function_name="${2:-}"
 
-    #--------------------------------------------------------
-    # Validate arguments
-    #--------------------------------------------------------
+    local rc=0
 
     if [[ -z "$stage" ]]
     then
         installer_log_error \
-            "Installer: stage name is empty"
+            "Stage name is empty"
 
-        INSTALLER_STAGE="error"
-        INSTALLER_LAST_RC=1
-
-        return 1
-    fi
-
-    if [[ -z "$module" ]]
-    then
-        installer_log_error \
-            "Installer: module is empty for stage: $stage"
-
-        INSTALLER_STAGE="$stage"
         INSTALLER_LAST_RC=1
 
         return 1
@@ -238,46 +194,26 @@ installer_run_stage()
     if [[ -z "$function_name" ]]
     then
         installer_log_error \
-            "Installer: entry point is empty for stage: $stage"
+            "Stage '$stage': function name is empty"
 
-        INSTALLER_STAGE="$stage"
         INSTALLER_LAST_RC=1
 
         return 1
     fi
-
-    #--------------------------------------------------------
-    # Set current stage
-    #--------------------------------------------------------
 
     INSTALLER_STAGE="$stage"
-    INSTALLER_LAST_RC=0
 
     installer_log_info \
-        "Starting stage: $stage"
+        "Starting stage: ${stage}"
 
     #--------------------------------------------------------
-    # Load module
-    #--------------------------------------------------------
-
-    if ! installer_load_module "$module"
-    then
-        installer_log_error \
-            "Stage '$stage': failed to load module: $module"
-
-        INSTALLER_LAST_RC=1
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Check entry point
+    # Verify entry point
     #--------------------------------------------------------
 
     if ! installer_require_function "$function_name"
     then
         installer_log_error \
-            "Stage '$stage': entry point missing: $function_name"
+            "Stage '${stage}': entry point missing: ${function_name}"
 
         INSTALLER_LAST_RC=1
 
@@ -289,12 +225,12 @@ installer_run_stage()
     #
     # IMPORTANT:
     # The function is called inside an if-condition so that
-    # set -e does not terminate the entire installer before
-    # we can process the return code.
+    # set -e does not terminate the installer before we can
+    # process its return code.
     #--------------------------------------------------------
 
     installer_log_debug \
-        "Stage '$stage': executing $function_name"
+        "Stage '${stage}': executing ${function_name}"
 
     if "$function_name"
     then
@@ -312,7 +248,7 @@ installer_run_stage()
     if (( rc != 0 ))
     then
         installer_log_error \
-            "Stage failed: $stage (rc=$rc)"
+            "Stage failed: ${stage} (rc=${rc})"
 
         return "$rc"
     fi
@@ -322,7 +258,7 @@ installer_run_stage()
     #--------------------------------------------------------
 
     installer_log_info \
-        "Stage completed: $stage"
+        "Stage completed: ${stage}"
 
     return 0
 }
@@ -335,8 +271,7 @@ installer_partition()
 {
     installer_run_stage \
         "Partition" \
-        "partition.sh" \
-        "partition"
+        "partition_main"
 }
 
 #============================================================
@@ -347,8 +282,7 @@ installer_filesystem()
 {
     installer_run_stage \
         "Filesystem" \
-        "filesystem.sh" \
-        "filesystem"
+        "filesystem_main"
 }
 
 #============================================================
@@ -359,8 +293,7 @@ installer_mount()
 {
     installer_run_stage \
         "Mount" \
-        "mount.sh" \
-        "mount"
+        "mount_main"
 }
 
 #============================================================
@@ -371,8 +304,7 @@ installer_packages()
 {
     installer_run_stage \
         "Packages" \
-        "packages.sh" \
-        "packages_install"
+        "packages_main"
 }
 
 #============================================================
@@ -383,8 +315,7 @@ installer_bootloader()
 {
     installer_run_stage \
         "Bootloader" \
-        "bootloader.sh" \
-        "bootloader"
+        "bootloader_main"
 }
 
 #============================================================
@@ -405,8 +336,10 @@ installer_run()
     # 1. Partition
     #--------------------------------------------------------
 
-    if ! installer_partition
+    if installer_partition
     then
+        :
+    else
         rc=$?
 
         installer_log_error \
@@ -422,8 +355,10 @@ installer_run()
     # 2. Filesystem
     #--------------------------------------------------------
 
-    if ! installer_filesystem
+    if installer_filesystem
     then
+        :
+    else
         rc=$?
 
         installer_log_error \
@@ -439,8 +374,10 @@ installer_run()
     # 3. Mount
     #--------------------------------------------------------
 
-    if ! installer_mount
+    if installer_mount
     then
+        :
+    else
         rc=$?
 
         installer_log_error \
@@ -456,8 +393,10 @@ installer_run()
     # 4. Packages
     #--------------------------------------------------------
 
-    if ! installer_packages
+    if installer_packages
     then
+        :
+    else
         rc=$?
 
         installer_log_error \
@@ -473,8 +412,10 @@ installer_run()
     # 5. Bootloader
     #--------------------------------------------------------
 
-    if ! installer_bootloader
+    if installer_bootloader
     then
+        :
+    else
         rc=$?
 
         installer_log_error \
@@ -490,41 +431,71 @@ installer_run()
     # Completed
     #--------------------------------------------------------
 
-    INSTALLER_STAGE="complete"
+    INSTALLER_STAGE="completed"
     INSTALLER_LAST_RC=0
 
     installer_log_info \
-        "Full Arch Linux installation completed"
+        "Full Arch Linux installation completed successfully"
 
     return 0
 }
 
 #============================================================
-# Status
+# Run selected stage
+#============================================================
+
+installer_run_selected()
+{
+    local stage="${1:-}"
+
+    case "$stage" in
+        partition)
+            installer_partition
+            ;;
+
+        filesystem)
+            installer_filesystem
+            ;;
+
+        mount)
+            installer_mount
+            ;;
+
+        packages)
+            installer_packages
+            ;;
+
+        bootloader)
+            installer_bootloader
+            ;;
+
+        full)
+            installer_run
+            ;;
+
+        *)
+            installer_log_error \
+                "Unknown installer stage: ${stage}"
+
+            INSTALLER_LAST_RC=1
+
+            return 1
+            ;;
+    esac
+}
+
+#============================================================
+# Controller status
 #============================================================
 
 installer_get_stage()
 {
-    printf '%s' "$INSTALLER_STAGE"
+    printf '%s\n' \
+        "$INSTALLER_STAGE"
 }
 
 installer_get_last_rc()
 {
-    printf '%s' "$INSTALLER_LAST_RC"
+    printf '%s\n' \
+        "$INSTALLER_LAST_RC"
 }
-
-#============================================================
-# Reset state
-#============================================================
-
-installer_reset_state()
-{
-    INSTALLER_STAGE="idle"
-    INSTALLER_LAST_RC=0
-
-    return 0
-}
-
-#============================================================
-# End
-#============================================================

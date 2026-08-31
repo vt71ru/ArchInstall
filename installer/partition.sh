@@ -85,15 +85,20 @@ partition_check_dependencies()
 
     for command_name in "${required[@]}"
     do
-        if ! command -v \
-            "$command_name" \
-            >/dev/null 2>&1
+        if ! command -v "$command_name" >/dev/null 2>&1
         then
-            dialog_error \
-                "Missing required program: ${command_name}"
+            if declare -F dialog_error >/dev/null 2>&1
+            then
+                dialog_error \
+                    "Partition" \
+                    "Missing required program: ${command_name}"
+            fi
 
-            logger_error \
-                "Partition dependency missing: ${command_name}"
+            if declare -F logger_error >/dev/null 2>&1
+            then
+                logger_error \
+                    "Partition dependency missing: ${command_name}"
+            fi
 
             return 1
         fi
@@ -123,6 +128,7 @@ partition_load_config()
     if [[ -z "$PARTITION_DISK" ]]
     then
         dialog_error \
+            "Partition" \
             "Target disk not selected"
 
         return 1
@@ -131,26 +137,27 @@ partition_load_config()
     if [[ ! -b "$PARTITION_DISK" ]]
     then
         dialog_error \
+            "Partition" \
             "Target disk does not exist: ${PARTITION_DISK}"
 
         return 1
     fi
 
-    case "$BOOT_MODE"
-    in
+    case "$BOOT_MODE" in
         UEFI|BIOS)
             ;;
 
         *)
             dialog_error \
+                "Partition" \
                 "Unsupported boot mode: ${BOOT_MODE:-empty}"
 
             return 1
             ;;
     esac
 
-    case "$PARTITION_TABLE"
-    in
+    case "$PARTITION_TABLE" in
+
         GPT|MBR)
             ;;
 
@@ -169,19 +176,19 @@ partition_load_config()
 
         *)
             dialog_error \
+                "Partition" \
                 "Unsupported partition table: ${PARTITION_TABLE}"
 
             return 1
             ;;
+
     esac
 
-    #
-    # UEFI requires GPT for this installer.
-    #
     if [[ "$BOOT_MODE" == "UEFI" &&
           "$PARTITION_TABLE" != "GPT" ]]
     then
         dialog_error \
+            "Partition" \
             "UEFI requires GPT partition table"
 
         return 1
@@ -205,18 +212,16 @@ partition_load_config()
 
 partition_check_disk_safety()
 {
-    local mount_source
-    local swap_device
+    local mount_source=""
+    local swap_device=""
 
-    #
-    # Do not partition a disk that itself is mounted.
-    #
     if findmnt \
         -rn \
         -S "$PARTITION_DISK" \
         >/dev/null 2>&1
     then
         dialog_error \
+            "Partition" \
             "Target disk is currently mounted: ${PARTITION_DISK}"
 
         logger_error \
@@ -225,17 +230,14 @@ partition_check_disk_safety()
         return 1
     fi
 
-    #
-    # Check mounted partitions belonging to target disk.
-    #
     while IFS= read -r mount_source
     do
-        [[ -z "$mount_source" ]] && \
-            continue
+        [[ -z "$mount_source" ]] && continue
 
         if [[ "$mount_source" == "$PARTITION_DISK"* ]]
         then
             dialog_error \
+                "Partition" \
                 "A partition of target disk is mounted: ${mount_source}"
 
             logger_error \
@@ -243,23 +245,21 @@ partition_check_disk_safety()
 
             return 1
         fi
+
     done < <(
         findmnt \
             -rn \
             -o SOURCE
     )
 
-    #
-    # Check active swap.
-    #
     while IFS= read -r swap_device
     do
-        [[ -z "$swap_device" ]] && \
-            continue
+        [[ -z "$swap_device" ]] && continue
 
         if [[ "$swap_device" == "$PARTITION_DISK"* ]]
         then
             dialog_error \
+                "Partition" \
                 "Target disk has active swap: ${swap_device}"
 
             logger_error \
@@ -267,6 +267,7 @@ partition_check_disk_safety()
 
             return 1
         fi
+
     done < <(
         swapon \
             --show=NAME \
@@ -283,47 +284,33 @@ partition_check_disk_safety()
 
 partition_validate_config()
 {
-    local filesystem
-    local swap_type
-    local swap_size
-    local home_size
-    local create_home
+    local filesystem=""
+    local swap_type=""
+    local swap_size=""
+    local home_size=""
+    local create_home=""
 
-    filesystem="$(
-        config_get FILESYSTEM
-    )"
+    filesystem="$(config_get FILESYSTEM)"
+    swap_type="$(config_get SWAP_TYPE)"
+    swap_size="$(config_get SWAP_SIZE)"
+    home_size="$(config_get HOME_SIZE)"
+    create_home="$(config_get CREATE_HOME)"
 
-    swap_type="$(
-        config_get SWAP_TYPE
-    )"
-
-    swap_size="$(
-        config_get SWAP_SIZE
-    )"
-
-    home_size="$(
-        config_get HOME_SIZE
-    )"
-
-    create_home="$(
-        config_get CREATE_HOME
-    )"
-
-    case "$filesystem"
-    in
+    case "$filesystem" in
         ext4|btrfs|xfs|f2fs)
             ;;
 
         *)
             dialog_error \
+                "Partition" \
                 "Unsupported filesystem: ${filesystem}"
 
             return 1
             ;;
     esac
 
-    case "$swap_type"
-    in
+    case "$swap_type" in
+
         none)
             ;;
 
@@ -331,6 +318,7 @@ partition_validate_config()
             if [[ -z "$swap_size" ]]
             then
                 dialog_error \
+                    "Partition" \
                     "SWAP_SIZE is required for swap partition"
 
                 return 1
@@ -339,6 +327,7 @@ partition_validate_config()
             if ! [[ "$swap_size" =~ ^[0-9]+([.][0-9]+)?$ ]]
             then
                 dialog_error \
+                    "Partition" \
                     "Invalid SWAP_SIZE: ${swap_size}"
 
                 return 1
@@ -350,10 +339,12 @@ partition_validate_config()
 
         *)
             dialog_error \
+                "Partition" \
                 "Unsupported swap type: ${swap_type}"
 
             return 1
             ;;
+
     esac
 
     if [[ "$create_home" == "1" ]]
@@ -361,6 +352,7 @@ partition_validate_config()
         if [[ -z "$home_size" ]]
         then
             dialog_error \
+                "Partition" \
                 "HOME_SIZE is required when home partition is enabled"
 
             return 1
@@ -369,6 +361,7 @@ partition_validate_config()
         if ! [[ "$home_size" =~ ^[0-9]+([.][0-9]+)?$ ]]
         then
             dialog_error \
+                "Partition" \
                 "Invalid HOME_SIZE: ${home_size}"
 
             return 1
@@ -384,27 +377,16 @@ partition_validate_config()
 
 partition_build_layout()
 {
-    local filesystem
-    local swap_type
-    local create_home
+    local filesystem=""
+    local swap_type=""
+    local create_home=""
 
-    filesystem="$(
-        config_get FILESYSTEM
-    )"
-
-    swap_type="$(
-        config_get SWAP_TYPE
-    )"
-
-    create_home="$(
-        config_get CREATE_HOME
-    )"
+    filesystem="$(config_get FILESYSTEM)"
+    swap_type="$(config_get SWAP_TYPE)"
+    create_home="$(config_get CREATE_HOME)"
 
     PARTITION_LAYOUT=()
 
-    #
-    # UEFI requires an EFI System Partition.
-    #
     if [[ "$BOOT_MODE" == "UEFI" ]]
     then
         PARTITION_LAYOUT+=(
@@ -412,9 +394,6 @@ partition_build_layout()
         )
     fi
 
-    #
-    # BIOS/GPT + GRUB requires BIOS Boot Partition.
-    #
     if [[ "$BOOT_MODE" == "BIOS" &&
           "$PARTITION_TABLE" == "GPT" ]]
     then
@@ -423,9 +402,6 @@ partition_build_layout()
         )
     fi
 
-    #
-    # Optional swap partition.
-    #
     if [[ "$swap_type" == "partition" ]]
     then
         PARTITION_LAYOUT+=(
@@ -433,9 +409,6 @@ partition_build_layout()
         )
     fi
 
-    #
-    # Optional /home partition.
-    #
     if [[ "$create_home" == "1" ]]
     then
         PARTITION_LAYOUT+=(
@@ -443,9 +416,6 @@ partition_build_layout()
         )
     fi
 
-    #
-    # Root always consumes remaining space.
-    #
     PARTITION_LAYOUT+=(
         "ROOT|${filesystem}|AUTO"
     )
@@ -470,10 +440,10 @@ partition_build_layout()
 
 partition_validate_layout()
 {
-    local item
-    local name
-    local type
-    local size
+    local item=""
+    local name=""
+    local type=""
+    local size=""
 
     for item in "${PARTITION_LAYOUT[@]}"
     do
@@ -482,8 +452,8 @@ partition_validate_layout()
             type \
             size <<< "$item"
 
-        case "$name"
-        in
+        case "$name" in
+
             EFI|BIOS|SWAP|HOME)
                 ;;
 
@@ -503,10 +473,10 @@ partition_validate_layout()
 
                 return 1
                 ;;
+
         esac
 
-        case "$type"
-        in
+        case "$type" in
             fat32|bios_grub|swap|ext4|btrfs|xfs|f2fs)
                 ;;
 
@@ -516,6 +486,7 @@ partition_validate_layout()
 
                 return 1
                 ;;
+
         esac
 
         if [[ "$size" != "AUTO" &&
@@ -546,8 +517,8 @@ partition_name()
         return 1
     fi
 
-    case "$disk"
-    in
+    case "$disk" in
+
         /dev/nvme*|/dev/mmcblk*|/dev/loop*)
             printf '%sp%s' \
                 "$disk" \
@@ -559,6 +530,7 @@ partition_name()
                 "$disk" \
                 "$number"
             ;;
+
     esac
 }
 
@@ -571,14 +543,14 @@ partition_create_table()
     logger_warn \
         "Creating partition table: ${PARTITION_TABLE}"
 
-    case "$PARTITION_TABLE"
-    in
+    case "$PARTITION_TABLE" in
+
         GPT)
             parted \
                 -s \
                 "$PARTITION_DISK" \
                 mklabel \
-                gpt
+                gpt || return 1
             ;;
 
         MBR)
@@ -586,15 +558,17 @@ partition_create_table()
                 -s \
                 "$PARTITION_DISK" \
                 mklabel \
-                msdos
+                msdos || return 1
             ;;
 
         *)
             dialog_error \
+                "Partition" \
                 "Unknown partition table: ${PARTITION_TABLE}"
 
             return 1
             ;;
+
     esac
 
     return 0
@@ -627,8 +601,8 @@ partition_create()
     logger_info \
         "Creating ${name}: ${start_mib}MiB-${end_mib}MiB"
 
-    case "$PARTITION_TABLE:$type"
-    in
+    case "$PARTITION_TABLE:$type" in
+
         GPT:fat32)
             parted \
                 -s \
@@ -638,8 +612,7 @@ partition_create()
                 "$name" \
                 fat32 \
                 "${start_mib}MiB" \
-                "${end_mib}MiB" || \
-                return 1
+                "${end_mib}MiB" || return 1
 
             parted \
                 -s \
@@ -647,8 +620,7 @@ partition_create()
                 set \
                 "$number" \
                 esp \
-                on || \
-                return 1
+                on || return 1
             ;;
 
         GPT:bios_grub)
@@ -658,8 +630,7 @@ partition_create()
                 mkpart \
                 "$name" \
                 "${start_mib}MiB" \
-                "${end_mib}MiB" || \
-                return 1
+                "${end_mib}MiB" || return 1
 
             parted \
                 -s \
@@ -667,8 +638,7 @@ partition_create()
                 set \
                 "$number" \
                 bios_grub \
-                on || \
-                return 1
+                on || return 1
             ;;
 
         GPT:swap)
@@ -680,8 +650,7 @@ partition_create()
                 "$name" \
                 linux-swap \
                 "${start_mib}MiB" \
-                "${end_mib}MiB" || \
-                return 1
+                "${end_mib}MiB" || return 1
             ;;
 
         GPT:ext4|GPT:btrfs|GPT:xfs|GPT:f2fs)
@@ -693,8 +662,7 @@ partition_create()
                 "$name" \
                 "$type" \
                 "${start_mib}MiB" \
-                "${end_mib}MiB" || \
-                return 1
+                "${end_mib}MiB" || return 1
             ;;
 
         MBR:fat32|MBR:swap|MBR:ext4|MBR:btrfs|MBR:xfs|MBR:f2fs)
@@ -706,21 +674,19 @@ partition_create()
                 primary \
                 "$type" \
                 "${start_mib}MiB" \
-                "${end_mib}MiB" || \
-                return 1
+                "${end_mib}MiB" || return 1
             ;;
 
         *)
             dialog_error \
+                "Partition" \
                 "Unsupported partition/table combination: ${PARTITION_TABLE}/${type}"
 
             return 1
             ;;
+
     esac
 
-    #
-    # For BIOS/MBR, mark the root partition bootable.
-    #
     if [[ "$PARTITION_TABLE" == "MBR" &&
           "$name" == "ROOT" ]]
     then
@@ -730,8 +696,7 @@ partition_create()
             set \
             "$number" \
             boot \
-            on || \
-            return 1
+            on || return 1
     fi
 
     return 0
@@ -746,11 +711,11 @@ partition_create_layout()
     local number=1
     local start_mib="1"
 
-    local item
-    local name
-    local type
-    local size
-    local end_mib
+    local item=""
+    local name=""
+    local type=""
+    local size=""
+    local end_mib=""
 
     for item in "${PARTITION_LAYOUT[@]}"
     do
@@ -768,9 +733,7 @@ partition_create_layout()
                 "$name" \
                 "$type" \
                 "$start_mib" \
-                "$end_mib" || \
-                return 1
-
+                "$end_mib" || return 1
         else
             end_mib="$(
                 awk \
@@ -784,12 +747,11 @@ partition_create_layout()
                 "$name" \
                 "$type" \
                 "$start_mib" \
-                "$end_mib" || \
-                return 1
+                "$end_mib" || return 1
         fi
 
-        case "$name"
-        in
+        case "$name" in
+
             EFI)
                 EFI_PART="$(
                     partition_name \
@@ -829,6 +791,7 @@ partition_create_layout()
                         "$number"
                 )"
                 ;;
+
         esac
 
         if [[ "$size" == "AUTO" ]]
@@ -837,7 +800,6 @@ partition_create_layout()
         fi
 
         start_mib="$end_mib"
-
         number=$((number + 1))
     done
 
@@ -856,8 +818,7 @@ partition_reload()
     logger_info \
         "Reloading kernel partition table"
 
-    if ! partprobe \
-        "$PARTITION_DISK"
+    if ! partprobe "$PARTITION_DISK"
     then
         logger_error \
             "partprobe failed for ${PARTITION_DISK}"
@@ -892,8 +853,7 @@ partition_prepare_swap_file()
 
     config_set \
         SWAP_FILE \
-        "/swapfile" || \
-        return 1
+        "/swapfile" || return 1
 
     logger_info \
         "Swap file configured: /swapfile"
@@ -907,30 +867,11 @@ partition_prepare_swap_file()
 
 partition_save()
 {
-    config_set \
-        EFI_PART \
-        "$EFI_PART" || \
-        return 1
-
-    config_set \
-        BIOS_PART \
-        "$BIOS_PART" || \
-        return 1
-
-    config_set \
-        ROOT_PART \
-        "$ROOT_PART" || \
-        return 1
-
-    config_set \
-        HOME_PART \
-        "$HOME_PART" || \
-        return 1
-
-    config_set \
-        SWAP_PART \
-        "$SWAP_PART" || \
-        return 1
+    config_set EFI_PART "$EFI_PART" || return 1
+    config_set BIOS_PART "$BIOS_PART" || return 1
+    config_set ROOT_PART "$ROOT_PART" || return 1
+    config_set HOME_PART "$HOME_PART" || return 1
+    config_set SWAP_PART "$SWAP_PART" || return 1
 
     logger_info \
         "Partition state saved to configuration"
@@ -948,6 +889,7 @@ partition_check()
           ! -b "$ROOT_PART" ]]
     then
         dialog_error \
+            "Partition" \
             "Root partition was not created: ${ROOT_PART:-empty}"
 
         return 1
@@ -959,6 +901,7 @@ partition_check()
               ! -b "$EFI_PART" ]]
         then
             dialog_error \
+                "Partition" \
                 "EFI partition was not created: ${EFI_PART:-empty}"
 
             return 1
@@ -972,6 +915,7 @@ partition_check()
               ! -b "$BIOS_PART" ]]
         then
             dialog_error \
+                "Partition" \
                 "BIOS boot partition was not created: ${BIOS_PART:-empty}"
 
             return 1
@@ -984,6 +928,7 @@ partition_check()
               ! -b "$HOME_PART" ]]
         then
             dialog_error \
+                "Partition" \
                 "Home partition was not created: ${HOME_PART:-empty}"
 
             return 1
@@ -996,6 +941,7 @@ partition_check()
               ! -b "$SWAP_PART" ]]
         then
             dialog_error \
+                "Partition" \
                 "Swap partition was not created: ${SWAP_PART:-empty}"
 
             return 1
@@ -1023,7 +969,7 @@ partition_show_result()
 }
 
 #============================================================
-# Main
+# Main entry point
 #============================================================
 
 partition()
@@ -1033,30 +979,14 @@ partition()
 
     partition_reset_state
 
-    partition_check_dependencies || \
-        return 1
+    partition_check_dependencies || return 1
+    partition_load_config || return 1
+    partition_validate_config || return 1
+    partition_check_disk_safety || return 1
+    partition_build_layout || return 1
+    partition_validate_layout || return 1
 
-    partition_load_config || \
-        return 1
-
-    partition_validate_config || \
-        return 1
-
-    partition_check_disk_safety || \
-        return 1
-
-    partition_build_layout || \
-        return 1
-
-    partition_validate_layout || \
-        return 1
-
-    #
-    # Only after all non-destructive validation is complete
-    # do we ask for destructive confirmation.
-    #
-
-    dialog_confirm \
+    if ! dialog_confirm \
         "WARNING
 
 ALL DATA ON
@@ -1065,8 +995,13 @@ ${PARTITION_DISK}
 
 WILL BE PERMANENTLY ERASED.
 
-Continue?" || \
+Continue?"
+    then
+        logger_info \
+            "Partitioning cancelled by user"
+
         return 1
+    fi
 
     logger_warn \
         "Wiping filesystem signatures on ${PARTITION_DISK}"
@@ -1076,28 +1011,18 @@ Continue?" || \
         "$PARTITION_DISK"
     then
         dialog_error \
+            "Partition" \
             "Failed to wipe filesystem signatures"
 
         return 1
     fi
 
-    partition_create_table || \
-        return 1
-
-    partition_create_layout || \
-        return 1
-
-    partition_reload || \
-        return 1
-
-    partition_check || \
-        return 1
-
-    partition_prepare_swap_file || \
-        return 1
-
-    partition_save || \
-        return 1
+    partition_create_table || return 1
+    partition_create_layout || return 1
+    partition_reload || return 1
+    partition_check || return 1
+    partition_prepare_swap_file || return 1
+    partition_save || return 1
 
     if ! config_save
     then

@@ -8,11 +8,13 @@
 #  Центральный controller установки.
 #
 #  Ответственность:
-#   • загрузка installer-модулей
+#   • контроль installer-модулей
 #   • проверка entry point
 #   • выполнение отдельных этапов
 #   • выполнение полной установки
 #   • контроль порядка этапов
+#   • фиксация текущего этапа
+#   • фиксация кода ошибки
 #   • возврат кодов ошибок
 #
 #  НЕ содержит:
@@ -25,13 +27,6 @@
 #   • package logic
 #   • bootloader logic
 #
-#  API installer-модулей:
-#
-#       partition.sh    -> partition_main()
-#       filesystem.sh   -> filesystem_main()
-#       mount.sh        -> mount_main()
-#       packages.sh     -> packages_main()
-#       bootloader.sh   -> bootloader_main()
 #============================================================
 
 if [[ -n "${INSTALLER_SH_LOADED:-}" ]]
@@ -47,6 +42,8 @@ readonly INSTALLER_SH_LOADED=1
 
 INSTALLER_STAGE="idle"
 INSTALLER_LAST_RC=0
+INSTALLER_LAST_FUNCTION=""
+INSTALLER_LAST_MESSAGE=""
 
 #============================================================
 # Logging helpers
@@ -100,6 +97,24 @@ installer_log_debug()
 }
 
 #============================================================
+# Stage output
+#============================================================
+
+installer_stage_output()
+{
+    local message="${1:-}"
+
+    if declare -F bootstrap_output >/dev/null 2>&1
+    then
+        bootstrap_output \
+            "$message"
+    else
+        printf '%s\n' \
+            "$message"
+    fi
+}
+
+#============================================================
 # Check installer module
 #============================================================
 
@@ -138,7 +153,7 @@ installer_load_module()
     fi
 
     installer_log_debug \
-        "Installer module already expected to be loaded: ${module}"
+        "Installer module already loaded: ${module}"
 
     return 0
 }
@@ -171,6 +186,20 @@ installer_require_function()
 }
 
 #============================================================
+# Reset controller state
+#============================================================
+
+installer_reset_state()
+{
+    INSTALLER_STAGE="idle"
+    INSTALLER_LAST_RC=0
+    INSTALLER_LAST_FUNCTION=""
+    INSTALLER_LAST_MESSAGE=""
+
+    return 0
+}
+
+#============================================================
 # Run one installation stage
 #============================================================
 
@@ -186,7 +215,10 @@ installer_run_stage()
         installer_log_error \
             "Stage name is empty"
 
+        INSTALLER_STAGE="unknown"
         INSTALLER_LAST_RC=1
+        INSTALLER_LAST_FUNCTION=""
+        INSTALLER_LAST_MESSAGE="Stage name is empty"
 
         return 1
     fi
@@ -194,17 +226,29 @@ installer_run_stage()
     if [[ -z "$function_name" ]]
     then
         installer_log_error \
-            "Stage '$stage': function name is empty"
+            "Stage '${stage}': function name is empty"
 
+        INSTALLER_STAGE="$stage"
         INSTALLER_LAST_RC=1
+        INSTALLER_LAST_FUNCTION=""
+        INSTALLER_LAST_MESSAGE="Function name is empty"
 
         return 1
     fi
 
+    #--------------------------------------------------------
+    # Update runtime state
+    #--------------------------------------------------------
+
     INSTALLER_STAGE="$stage"
+    INSTALLER_LAST_FUNCTION="$function_name"
+    INSTALLER_LAST_MESSAGE=""
 
     installer_log_info \
         "Starting stage: ${stage}"
+
+    installer_stage_output \
+        "[START] ${stage}"
 
     #--------------------------------------------------------
     # Verify entry point
@@ -212,10 +256,16 @@ installer_run_stage()
 
     if ! installer_require_function "$function_name"
     then
-        installer_log_error \
-            "Stage '${stage}': entry point missing: ${function_name}"
-
         INSTALLER_LAST_RC=1
+
+        INSTALLER_LAST_MESSAGE \
+            "Entry point missing: ${function_name}"
+
+        installer_log_error \
+            "Stage '${stage}': ${INSTALLER_LAST_MESSAGE}"
+
+        installer_stage_output \
+            "[FAILED] ${stage} (rc=1)"
 
         return 1
     fi
@@ -224,9 +274,9 @@ installer_run_stage()
     # Execute stage
     #
     # IMPORTANT:
-    # The function is called inside an if-condition so that
-    # set -e does not terminate the installer before we can
-    # process its return code.
+    # The function is executed inside an if statement so that
+    # set -e does not terminate the entire installer before
+    # we can capture its return code.
     #--------------------------------------------------------
 
     installer_log_debug \
@@ -242,23 +292,35 @@ installer_run_stage()
     INSTALLER_LAST_RC="$rc"
 
     #--------------------------------------------------------
-    # Stage failed
+    # Failure
     #--------------------------------------------------------
 
     if (( rc != 0 ))
     then
+        INSTALLER_LAST_MESSAGE \
+            "Function ${function_name} returned ${rc}"
+
         installer_log_error \
-            "Stage failed: ${stage} (rc=${rc})"
+            "Stage failed: ${stage} (function=${function_name}, rc=${rc})"
+
+        installer_stage_output \
+            "[FAILED] ${stage} (rc=${rc})"
 
         return "$rc"
     fi
 
     #--------------------------------------------------------
-    # Stage completed
+    # Success
     #--------------------------------------------------------
+
+    INSTALLER_LAST_MESSAGE \
+        "Stage completed successfully"
 
     installer_log_info \
         "Stage completed: ${stage}"
+
+    installer_stage_output \
+        "[ OK ] ${stage}"
 
     return 0
 }
@@ -308,6 +370,39 @@ installer_packages()
 }
 
 #============================================================
+# Users
+#============================================================
+
+installer_users()
+{
+    installer_run_stage \
+        "Users" \
+        "users_main"
+}
+
+#============================================================
+# Desktop
+#============================================================
+
+installer_desktop()
+{
+    installer_run_stage \
+        "Desktop" \
+        "desktop_main"
+}
+
+#============================================================
+# Services
+#============================================================
+
+installer_services()
+{
+    installer_run_stage \
+        "Services" \
+        "services_main"
+}
+
+#============================================================
 # Bootloader
 #============================================================
 
@@ -329,8 +424,18 @@ installer_run()
     installer_log_info \
         "Starting full Arch Linux installation"
 
+    installer_reset_state
+
     INSTALLER_STAGE="starting"
-    INSTALLER_LAST_RC=0
+
+    installer_stage_output \
+        "========================================"
+
+    installer_stage_output \
+        "FULL INSTALLATION"
+
+    installer_stage_output \
+        "========================================"
 
     #--------------------------------------------------------
     # 1. Partition
@@ -342,11 +447,11 @@ installer_run()
     else
         rc=$?
 
-        installer_log_error \
-            "Installation stopped at partition stage"
-
         INSTALLER_STAGE="Partition"
         INSTALLER_LAST_RC="$rc"
+
+        installer_log_error \
+            "Installation stopped at partition stage"
 
         return "$rc"
     fi
@@ -361,11 +466,11 @@ installer_run()
     else
         rc=$?
 
-        installer_log_error \
-            "Installation stopped at filesystem stage"
-
         INSTALLER_STAGE="Filesystem"
         INSTALLER_LAST_RC="$rc"
+
+        installer_log_error \
+            "Installation stopped at filesystem stage"
 
         return "$rc"
     fi
@@ -380,11 +485,11 @@ installer_run()
     else
         rc=$?
 
-        installer_log_error \
-            "Installation stopped at mount stage"
-
         INSTALLER_STAGE="Mount"
         INSTALLER_LAST_RC="$rc"
+
+        installer_log_error \
+            "Installation stopped at mount stage"
 
         return "$rc"
     fi
@@ -399,17 +504,74 @@ installer_run()
     else
         rc=$?
 
-        installer_log_error \
-            "Installation stopped at packages stage"
-
         INSTALLER_STAGE="Packages"
         INSTALLER_LAST_RC="$rc"
+
+        installer_log_error \
+            "Installation stopped at packages stage"
 
         return "$rc"
     fi
 
     #--------------------------------------------------------
-    # 5. Bootloader
+    # 5. Users
+    #--------------------------------------------------------
+
+    if installer_users
+    then
+        :
+    else
+        rc=$?
+
+        INSTALLER_STAGE="Users"
+        INSTALLER_LAST_RC="$rc"
+
+        installer_log_error \
+            "Installation stopped at users stage"
+
+        return "$rc"
+    fi
+
+    #--------------------------------------------------------
+    # 6. Desktop
+    #--------------------------------------------------------
+
+    if installer_desktop
+    then
+        :
+    else
+        rc=$?
+
+        INSTALLER_STAGE="Desktop"
+        INSTALLER_LAST_RC="$rc"
+
+        installer_log_error \
+            "Installation stopped at desktop stage"
+
+        return "$rc"
+    fi
+
+    #--------------------------------------------------------
+    # 7. Services
+    #--------------------------------------------------------
+
+    if installer_services
+    then
+        :
+    else
+        rc=$?
+
+        INSTALLER_STAGE="Services"
+        INSTALLER_LAST_RC="$rc"
+
+        installer_log_error \
+            "Installation stopped at services stage"
+
+        return "$rc"
+    fi
+
+    #--------------------------------------------------------
+    # 8. Bootloader
     #--------------------------------------------------------
 
     if installer_bootloader
@@ -418,11 +580,11 @@ installer_run()
     else
         rc=$?
 
-        installer_log_error \
-            "Installation stopped at bootloader stage"
-
         INSTALLER_STAGE="Bootloader"
         INSTALLER_LAST_RC="$rc"
+
+        installer_log_error \
+            "Installation stopped at bootloader stage"
 
         return "$rc"
     fi
@@ -433,6 +595,17 @@ installer_run()
 
     INSTALLER_STAGE="completed"
     INSTALLER_LAST_RC=0
+    INSTALLER_LAST_FUNCTION=""
+    INSTALLER_LAST_MESSAGE="Installation completed successfully"
+
+    installer_stage_output \
+        "========================================"
+
+    installer_stage_output \
+        "FULL INSTALLATION COMPLETED"
+
+    installer_stage_output \
+        "========================================"
 
     installer_log_info \
         "Full Arch Linux installation completed successfully"
@@ -448,7 +621,8 @@ installer_run_selected()
 {
     local stage="${1:-}"
 
-    case "$stage" in
+    case "$stage"
+    in
         partition)
             installer_partition
             ;;
@@ -465,6 +639,18 @@ installer_run_selected()
             installer_packages
             ;;
 
+        users)
+            installer_users
+            ;;
+
+        desktop)
+            installer_desktop
+            ;;
+
+        services)
+            installer_services
+            ;;
+
         bootloader)
             installer_bootloader
             ;;
@@ -477,7 +663,10 @@ installer_run_selected()
             installer_log_error \
                 "Unknown installer stage: ${stage}"
 
+            INSTALLER_STAGE="unknown"
             INSTALLER_LAST_RC=1
+            INSTALLER_LAST_FUNCTION=""
+            INSTALLER_LAST_MESSAGE="Unknown stage: ${stage}"
 
             return 1
             ;;
@@ -498,4 +687,16 @@ installer_get_last_rc()
 {
     printf '%s\n' \
         "$INSTALLER_LAST_RC"
+}
+
+installer_get_last_function()
+{
+    printf '%s\n' \
+        "$INSTALLER_LAST_FUNCTION"
+}
+
+installer_get_last_message()
+{
+    printf '%s\n' \
+        "$INSTALLER_LAST_MESSAGE"
 }

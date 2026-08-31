@@ -14,12 +14,34 @@
 #   • управление порядком
 #   • запуск главного меню
 #
+# Контракт installer-модулей:
+#
+#   installer/keyboard.sh          -> keyboard()
+#   installer/locale.sh            -> locale()
+#   installer/locale_generate.sh   -> locale_generate()
+#   installer/network.sh           -> network()
+#   installer/mirrors.sh           -> mirrors()
+#   installer/disks.sh             -> disks()
+#   installer/partition.sh         -> partition()
+#   installer/filesystem.sh        -> filesystem()
+#   installer/mount.sh             -> mount()
+#   installer/packages.sh          -> packages()
+#   installer/users.sh             -> users()
+#   installer/desktop.sh           -> desktop()
+#   installer/services.sh          -> services()
+#   installer/bootloader.sh        -> bootloader()
+#   installer/summary.sh           -> summary()
+#
 # Не отвечает за:
 #   • загрузку библиотек
 #   • загрузку installer-модулей
 #   • проверку root
 #   • проверку Arch Linux
 #   • инициализацию TUI
+#============================================================
+
+#============================================================
+# Prevent double loading
 #============================================================
 
 if [[ -n "${ARCH_INSTALLER_INSTALLER_SH_LOADED:-}" ]]
@@ -86,7 +108,10 @@ installer_log_error()
 }
 
 #============================================================
-# Stage -> function
+# Stage -> function mapping
+#
+# IMPORTANT:
+# Function name is now exactly the same as stage name.
 #============================================================
 
 installer_get_stage_function()
@@ -95,68 +120,64 @@ installer_get_stage_function()
 
     case "$stage"
     in
-        welcome)
-            printf '%s\n' welcome
-            ;;
-
         keyboard)
-            printf '%s\n' keyboard
+            printf '%s\n' 'keyboard'
             ;;
 
         locale)
-            printf '%s\n' locale
+            printf '%s\n' 'locale'
             ;;
 
         locale_generate)
-            printf '%s\n' locale_generate
+            printf '%s\n' 'locale_generate'
             ;;
 
         network)
-            printf '%s\n' network
+            printf '%s\n' 'network'
             ;;
 
         mirrors)
-            printf '%s\n' mirrors
+            printf '%s\n' 'mirrors'
             ;;
 
         disks)
-            printf '%s\n' disks
+            printf '%s\n' 'disks'
             ;;
 
         partition)
-            printf '%s\n' partition
+            printf '%s\n' 'partition'
             ;;
 
         filesystem)
-            printf '%s\n' filesystem
+            printf '%s\n' 'filesystem'
             ;;
 
         mount)
-            printf '%s\n' mount
+            printf '%s\n' 'mount'
             ;;
 
         packages)
-            printf '%s\n' packages_install
+            printf '%s\n' 'packages'
             ;;
 
         users)
-            printf '%s\n' users_configure
+            printf '%s\n' 'users'
             ;;
 
         desktop)
-            printf '%s\n' desktop_install
+            printf '%s\n' 'desktop'
             ;;
 
         services)
-            printf '%s\n' services_configure
+            printf '%s\n' 'services'
             ;;
 
         bootloader)
-            printf '%s\n' bootloader_install
+            printf '%s\n' 'bootloader'
             ;;
 
         summary)
-            printf '%s\n' summary_show
+            printf '%s\n' 'summary'
             ;;
 
         *)
@@ -175,23 +196,69 @@ installer_get_stage_title()
 
     case "$stage"
     in
-        welcome)          printf '%s\n' 'Welcome' ;;
-        keyboard)        printf '%s\n' 'Keyboard configuration' ;;
-        locale)          printf '%s\n' 'Locale configuration' ;;
-        locale_generate) printf '%s\n' 'Locale generation' ;;
-        network)         printf '%s\n' 'Network configuration' ;;
-        mirrors)         printf '%s\n' 'Mirror configuration' ;;
-        disks)           printf '%s\n' 'Disk selection' ;;
-        partition)       printf '%s\n' 'Disk partitioning' ;;
-        filesystem)      printf '%s\n' 'Filesystem creation' ;;
-        mount)           printf '%s\n' 'Mount filesystems' ;;
-        packages)        printf '%s\n' 'Package installation' ;;
-        users)           printf '%s\n' 'User configuration' ;;
-        desktop)         printf '%s\n' 'Desktop installation' ;;
-        services)        printf '%s\n' 'Service configuration' ;;
-        bootloader)      printf '%s\n' 'Bootloader installation' ;;
-        summary)         printf '%s\n' 'Installation summary' ;;
-        *)               printf '%s\n' "$stage" ;;
+        keyboard)
+            printf '%s\n' 'Keyboard configuration'
+            ;;
+
+        locale)
+            printf '%s\n' 'Locale configuration'
+            ;;
+
+        locale_generate)
+            printf '%s\n' 'Locale generation'
+            ;;
+
+        network)
+            printf '%s\n' 'Network configuration'
+            ;;
+
+        mirrors)
+            printf '%s\n' 'Mirror configuration'
+            ;;
+
+        disks)
+            printf '%s\n' 'Disk selection'
+            ;;
+
+        partition)
+            printf '%s\n' 'Disk partitioning'
+            ;;
+
+        filesystem)
+            printf '%s\n' 'Filesystem creation'
+            ;;
+
+        mount)
+            printf '%s\n' 'Mount filesystems'
+            ;;
+
+        packages)
+            printf '%s\n' 'Package installation'
+            ;;
+
+        users)
+            printf '%s\n' 'User configuration'
+            ;;
+
+        desktop)
+            printf '%s\n' 'Desktop installation'
+            ;;
+
+        services)
+            printf '%s\n' 'Service configuration'
+            ;;
+
+        bootloader)
+            printf '%s\n' 'Bootloader installation'
+            ;;
+
+        summary)
+            printf '%s\n' 'Installation summary'
+            ;;
+
+        *)
+            printf '%s\n' "$stage"
+            ;;
     esac
 }
 
@@ -228,17 +295,20 @@ installer_check_stage()
     local stage="${1:-}"
     local function_name=""
 
-    [[ -n "$stage" ]] || {
+    if [[ -z "$stage" ]]
+    then
         installer_log_error \
             "installer_check_stage: empty stage"
+
         return 1
-    }
+    fi
 
     function_name="$(
         installer_get_stage_function "$stage"
     )" || {
         installer_log_error \
             "Unknown installer stage: ${stage}"
+
         return 1
     }
 
@@ -249,6 +319,9 @@ installer_check_stage()
 
         return 1
     fi
+
+    installer_log_info \
+        "Stage OK: ${stage} -> ${function_name}"
 
     return 0
 }
@@ -261,18 +334,27 @@ installer_check_all_stages()
 {
     local stage
 
+    installer_log_info \
+        "Checking installer stages..."
+
     while IFS= read -r stage
     do
         [[ -z "$stage" ]] && continue
 
-        installer_log_info \
-            "Checking stage: ${stage}"
+        if ! installer_check_stage "$stage"
+        then
+            installer_log_error \
+                "Required stage is unavailable: ${stage}"
 
-        installer_check_stage "$stage" || return 1
+            return 1
+        fi
 
     done < <(
         installer_full_installation_stages
     )
+
+    installer_log_info \
+        "All installer stages are available"
 
     return 0
 }
@@ -288,17 +370,20 @@ installer_run_stage()
     local title=""
     local rc=0
 
-    [[ -n "$stage" ]] || {
+    if [[ -z "$stage" ]]
+    then
         installer_log_error \
             "installer_run_stage: empty stage"
+
         return 1
-    }
+    fi
 
     function_name="$(
         installer_get_stage_function "$stage"
     )" || {
         installer_log_error \
             "Unknown installer stage: ${stage}"
+
         return 1
     }
 
@@ -309,7 +394,7 @@ installer_run_stage()
     if ! declare -F "$function_name" >/dev/null 2>&1
     then
         installer_log_error \
-            "Function not found: ${function_name}"
+            "Stage function is not loaded: ${function_name}"
 
         return 127
     fi
@@ -319,12 +404,8 @@ installer_run_stage()
 
     #
     # IMPORTANT:
-    # Do not write simply:
-    #
-    #   "$function_name"
-    #   rc=$?
-    #
-    # because the project uses set -e.
+    # The function is executed inside an if statement.
+    # This is compatible with set -e.
     #
 
     if "$function_name"
@@ -337,7 +418,16 @@ installer_run_stage()
     if (( rc != 0 ))
     then
         installer_log_error \
-            "Stage failed: ${title} (exit code ${rc})"
+            "Stage FAILED: ${title}"
+
+        installer_log_error \
+            "Stage name: ${stage}"
+
+        installer_log_error \
+            "Function: ${function_name}"
+
+        installer_log_error \
+            "Exit code: ${rc}"
 
         return "$rc"
     fi
@@ -354,8 +444,8 @@ installer_run_stage()
 
 installer_full_install()
 {
-    local stage
-    local title
+    local stage=""
+    local title=""
     local rc=0
     local step=0
     local total=0
@@ -364,22 +454,22 @@ installer_full_install()
         "=========================================="
 
     installer_log_info \
-        "Starting full installation"
+        "STARTING FULL INSTALLATION"
 
     installer_log_info \
         "=========================================="
 
     #
-    # First verify every required stage.
+    # Verify all stages before starting.
     #
 
     if ! installer_check_all_stages
     then
         installer_log_error \
-            "Full installation cannot start"
+            "FULL INSTALLATION CANNOT START"
 
         installer_log_error \
-            "One or more installer stages are missing"
+            "One or more stage functions are missing"
 
         return 1
     fi
@@ -390,7 +480,11 @@ installer_full_install()
     )"
 
     installer_log_info \
-        "Installation stages: ${total}"
+        "Total installation stages: ${total}"
+
+    #
+    # Execute stages sequentially.
+    #
 
     while IFS= read -r stage
     do
@@ -409,12 +503,10 @@ installer_full_install()
             "STEP ${step}/${total}: ${title}"
 
         installer_log_info \
-            "------------------------------------------"
+            "Stage: ${stage}"
 
-        #
-        # IMPORTANT:
-        # Capture the real stage return code.
-        #
+        installer_log_info \
+            "------------------------------------------"
 
         if installer_run_stage "$stage"
         then

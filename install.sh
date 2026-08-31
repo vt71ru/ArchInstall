@@ -193,7 +193,6 @@ load_module()
 {
     local kind="${1:-}"
     local name="${2:-}"
-
     local directory
     local file
 
@@ -468,6 +467,9 @@ check_config_api()
         fi
     done
 
+    logger_info \
+        "CONFIG API check passed"
+
     return 0
 }
 
@@ -590,13 +592,15 @@ check_installer_api()
 
     for function_name in \
         installer_run \
-        installer_partition \
-        installer_filesystem \
-        installer_mount \
-        installer_packages \
-        installer_bootloader \
-        installer_get_stage \
-        installer_get_last_rc
+        installer_full_install \
+        installer_run_stage \
+        installer_check_stage \
+        installer_check_all_stages \
+        installer_get_stage_function \
+        installer_get_stage_title \
+        installer_full_installation_stages \
+        installer_start_menu \
+        installer_main
     do
         if ! declare -F "$function_name" >/dev/null 2>&1
         then
@@ -606,6 +610,9 @@ check_installer_api()
             return 1
         fi
     done
+
+    logger_info \
+        "Installer controller API check passed"
 
     return 0
 }

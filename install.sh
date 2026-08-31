@@ -1,278 +1,179 @@
 #!/usr/bin/env bash
 #
 #============================================================
-# Arch Installer
+#  Arch Installer
 #------------------------------------------------------------
-# install.sh
+#  install.sh
 #
-# Главный bootstrap / orchestrator.
+#  Главный bootstrap/orchestrator проекта.
 #
-# Ответственность:
-#   • Определение ROOT_DIR
-#   • Загрузка библиотек
+#  Ответственность:
 #   • Проверка окружения
-#   • Инициализация logger
+#   • Инициализация логгера
+#   • Загрузка core-библиотек
+#   • Инициализация конфигурации
+#   • Определение режима загрузки
+#   • Загрузка installer-модулей
 #   • Инициализация TUI
-#   • Установка аварийного восстановления
 #   • Запуск главного меню
+#   • Корректное завершение
 #
-# Не содержит:
-#   • partition logic
-#   • filesystem logic
-#   • package logic
-#   • bootloader logic
-#   • CONFIG business logic
-#   • drawing logic
-#   • keyboard parsing
-#
+#  install.sh НЕ выполняет установку напрямую.
 #============================================================
 
 set -Eeuo pipefail
 
-#============================================================
-# Bootstrap state
-#============================================================
+IFS=$'\n\t'
 
-readonly INSTALLER_NAME="Arch Installer"
-
-INSTALLER_ROOT=""
-INSTALLER_LIB=""
-INSTALLER_MODULES=""
-
-INSTALLER_EXITING=0
+umask 022
 
 #============================================================
-# Determine script directory
+# Application
 #============================================================
 
-get_script_dir()
-{
-    local source="${BASH_SOURCE[0]}"
+readonly APP_NAME="Arch Installer"
+readonly APP_VERSION="0.1.0"
 
-    while [[ -h "$source" ]]
-    do
-        local dir=""
+readonly ROOT_DIR="$(
+    cd "$(dirname "${BASH_SOURCE[0]}")" &&
+    pwd
+)"
 
-        dir="$(
-            cd -P "$(dirname "$source")" >/dev/null 2>&1 &&
-            pwd
-        )"
-
-        source="$(readlink "$source")"
-
-        if [[ "$source" != /* ]]
-        then
-            source="$dir/$source"
-        fi
-    done
-
-    cd -P "$(dirname "$source")" >/dev/null 2>&1 &&
-        pwd
-}
+readonly LIB_DIR="${ROOT_DIR}/lib"
+readonly INSTALLER_DIR="${ROOT_DIR}/installer"
+readonly WIDGET_DIR="${ROOT_DIR}/widgets"
+readonly ASSET_DIR="${ROOT_DIR}/assets"
 
 #============================================================
-# Project paths
+# Runtime state
 #============================================================
 
-INSTALLER_ROOT="$(get_script_dir)"
+LOGGER_READY=0
+TUI_READY=0
 
-if [[ -z "$INSTALLER_ROOT" ]]
+#============================================================
+# Logger bootstrap
+#============================================================
+
+readonly LOGGER_MODULE="${LIB_DIR}/logger.sh"
+
+if [[ ! -f "$LOGGER_MODULE" ]]
 then
-    printf '%s\n' \
-        "ERROR: cannot determine installer root" \
+    printf \
+        'Missing logger module: %s\n' \
+        "$LOGGER_MODULE" \
         >&2
 
     exit 1
 fi
 
-readonly INSTALLER_ROOT
+export LOGGER_FILE="${LOGGER_FILE:-/tmp/arch-installer.log}"
+export LOGGER_LEVEL="${LOGGER_LEVEL:-INFO}"
 
-INSTALLER_LIB="$INSTALLER_ROOT/lib"
-INSTALLER_MODULES="$INSTALLER_ROOT/installer"
-
-readonly INSTALLER_LIB
-readonly INSTALLER_MODULES
+# shellcheck disable=SC1090
+source "$LOGGER_MODULE"
 
 #============================================================
-# Bootstrap output
+# Fatal helper
 #============================================================
 
-bootstrap_output()
+die()
 {
-    local message="${1-}"
+    local message="${1:-Fatal error}"
 
-    #
-    # Prefer real terminal.
-    #
-    if [[ -e /dev/tty ]] &&
-       { : </dev/tty; } 2>/dev/null
+    if declare -F logger_error >/dev/null 2>&1
     then
-        printf '%s\n' "$message" >/dev/tty
-        return 0
+        logger_error \
+            "$message" \
+            || true
     fi
 
-    #
-    # Fallback to stderr.
-    #
-    printf '%s\n' "$message" >&2
+    printf \
+        'Error: %s\n' \
+        "$message" \
+        >&2
+
+    return 1
 }
 
 #============================================================
-# Bootstrap logging
+# Generic module loader
 #============================================================
 
-bootstrap_log()
+load_module()
 {
-    local level="${1:-INFO}"
+    local kind="${1:-}"
+    local name="${2:-}"
 
-    shift || true
+    local directory
+    local file
 
-    bootstrap_output \
-        "[$INSTALLER_NAME] [$level] $*"
-}
+    case "$kind" in
+        lib)
+            directory="$LIB_DIR"
+            ;;
 
-#============================================================
-# Load library
-#============================================================
+        installer)
+            directory="$INSTALLER_DIR"
+            ;;
 
-load_library()
-{
-    local file="${1:-}"
+        *)
+            die \
+                "Unknown module type: ${kind}"
 
-    if [[ -z "$file" ]]
+            return 1
+            ;;
+    esac
+
+    if [[ -z "$name" ]]
     then
-        bootstrap_log ERROR \
-            "load_library(): empty file path"
+        die \
+            "Module name is empty"
 
         return 1
     fi
+
+    file="${directory}/${name}"
 
     if [[ ! -f "$file" ]]
     then
-        bootstrap_log ERROR \
-            "Required library not found: $file"
-
-        return 1
-    fi
-
-    bootstrap_log DEBUG \
-        "Loading library: $file"
-
-    # shellcheck disable=SC1090
-    if ! source "$file"
-    then
-        bootstrap_log ERROR \
-            "Failed to load library: $file"
-
-        return 1
-    fi
-
-    return 0
-}
-
-#============================================================
-# Load logger
-#============================================================
-
-load_logger()
-{
-    local logger_file="$INSTALLER_LIB/logger.sh"
-
-    if [[ ! -f "$logger_file" ]]
-    then
-        bootstrap_log ERROR \
-            "logger.sh not found: $logger_file"
-
-        return 1
-    fi
-
-    bootstrap_log DEBUG \
-        "Loading logger"
-
-    # shellcheck disable=SC1090
-    if ! source "$logger_file"
-    then
-        bootstrap_log ERROR \
-            "Failed to load logger.sh"
-
-        return 1
-    fi
-
-    if ! declare -F logger_init >/dev/null 2>&1
-    then
-        bootstrap_log ERROR \
-            "logger_init() is unavailable"
-
-        return 1
-    fi
-
-    if ! declare -F logger_info >/dev/null 2>&1
-    then
-        bootstrap_log ERROR \
-            "logger_info() is unavailable"
-
-        return 1
-    fi
-
-    if ! declare -F logger_error >/dev/null 2>&1
-    then
-        bootstrap_log ERROR \
-            "logger_error() is unavailable"
-
-        return 1
-    fi
-
-    return 0
-}
-
-#============================================================
-# Load TUI
-#============================================================
-
-load_tui()
-{
-    local tui_file="$INSTALLER_LIB/tui.sh"
-
-    if [[ ! -f "$tui_file" ]]
-    then
-        logger_error \
-            "tui.sh not found: $tui_file"
+        die \
+            "Missing ${kind} module: ${file}"
 
         return 1
     fi
 
     logger_debug \
-        "Loading TUI: $tui_file"
+        "Loading ${kind} module: ${name}"
 
     # shellcheck disable=SC1090
-    if ! source "$tui_file"
+    source "$file"
+}
+
+require_lib()
+{
+    load_module \
+        lib \
+        "$1"
+}
+
+require_installer()
+{
+    load_module \
+        installer \
+        "$1"
+}
+
+#============================================================
+# Environment
+#============================================================
+
+check_root()
+{
+    if [[ "$EUID" -ne 0 ]]
     then
-        logger_error \
-            "Failed to load tui.sh"
-
-        return 1
-    fi
-
-    if ! declare -F tui_init >/dev/null 2>&1
-    then
-        logger_error \
-            "tui.sh loaded but tui_init() is unavailable"
-
-        return 1
-    fi
-
-    if ! declare -F tui_start >/dev/null 2>&1
-    then
-        logger_error \
-            "tui.sh loaded but tui_start() is unavailable"
-
-        return 1
-    fi
-
-    if ! declare -F tui_restore >/dev/null 2>&1
-    then
-        logger_error \
-            "tui.sh loaded but tui_restore() is unavailable"
+        die \
+            "Installer must be run as root"
 
         return 1
     fi
@@ -280,38 +181,12 @@ load_tui()
     return 0
 }
 
-#============================================================
-# Load main menu
-#============================================================
-
-load_main_menu()
+check_arch_environment()
 {
-    local menu_file="$INSTALLER_MODULES/menu_main.sh"
-
-    if [[ ! -f "$menu_file" ]]
+    if [[ ! -f /etc/arch-release ]]
     then
-        logger_error \
-            "Main menu not found: $menu_file"
-
-        return 1
-    fi
-
-    logger_debug \
-        "Loading main menu: $menu_file"
-
-    # shellcheck disable=SC1090
-    if ! source "$menu_file"
-    then
-        logger_error \
-            "Failed to load main menu: $menu_file"
-
-        return 1
-    fi
-
-    if ! declare -F menu_main >/dev/null 2>&1
-    then
-        logger_error \
-            "menu_main.sh loaded but menu_main() is unavailable"
+        die \
+            "This installer must be run from Arch Linux"
 
         return 1
     fi
@@ -319,307 +194,454 @@ load_main_menu()
     return 0
 }
 
-#============================================================
-# Environment checks
-#============================================================
-
-check_environment()
+check_project_structure()
 {
-    logger_debug \
-        "Checking runtime environment"
+    local directory
 
-    #--------------------------------------------------------
-    # Bash
-    #--------------------------------------------------------
-
-    if (( BASH_VERSINFO[0] < 5 ))
-    then
-        logger_error \
-            "Bash 5.x or newer is required"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Root
-    #--------------------------------------------------------
-
-    if (( EUID != 0 ))
-    then
-        logger_error \
-            "Arch Installer must be run as root"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # /dev/tty
-    #--------------------------------------------------------
-
-    if [[ ! -e /dev/tty ]]
-    then
-        logger_error \
-            "/dev/tty is unavailable"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Test /dev/tty
-    #--------------------------------------------------------
-
-    if ! { : </dev/tty; } 2>/dev/null
-    then
-        logger_error \
-            "Cannot access /dev/tty"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Required commands
-    #--------------------------------------------------------
-
-    local command
-
-    for command in \
-        bash \
-        stty \
-        tput \
-        tty \
-        lsblk \
-        mount \
-        umount \
-        awk \
-        sed
+    for directory in \
+        "$LIB_DIR" \
+        "$INSTALLER_DIR"
     do
-        if ! command -v "$command" >/dev/null 2>&1
+        if [[ ! -d "$directory" ]]
         then
-            logger_error \
-                "Required command not found: $command"
+            die \
+                "Missing project directory: ${directory}"
 
             return 1
         fi
     done
 
-    #--------------------------------------------------------
-    # Verify actual TTY
-    #--------------------------------------------------------
-
-    if ! tty </dev/tty >/dev/null 2>&1
+    if [[ ! -d /mnt ]]
     then
-        logger_error \
-            "/dev/tty is not a usable terminal"
+        die \
+            "Target directory /mnt is missing"
 
         return 1
     fi
-
-    logger_debug \
-        "Runtime environment check passed"
 
     return 0
 }
 
 #============================================================
-# TUI cleanup
+# Terminal check
 #============================================================
 
-cleanup_tui()
+check_terminal()
 {
-    if (( INSTALLER_EXITING ))
+    if [[ ! -t 0 ]]
     then
-        return 0
+        die \
+            "stdin is not a TTY"
+
+        return 1
     fi
 
-    INSTALLER_EXITING=1
-
-    #
-    # tui.sh may not have been loaded yet.
-    #
-    if ! declare -F tui_restore >/dev/null 2>&1
+    if [[ ! -t 1 ]]
     then
-        return 0
+        die \
+            "stdout is not a TTY"
+
+        return 1
     fi
 
-    #
-    # Nothing to restore.
-    #
-    if [[ "${TUI_INITIALIZED:-0}" != "1" ]]
+    if [[ -z "${TERM:-}" ]]
     then
-        return 0
+        die \
+            "TERM is not set"
+
+        return 1
     fi
 
-    tui_restore || true
+    if [[ "${TERM}" == "dumb" ]]
+    then
+        die \
+            "Unsupported terminal: TERM=dumb"
+
+        return 1
+    fi
+
+    if ! command -v tput >/dev/null 2>&1
+    then
+        die \
+            "tput not found"
+
+        return 1
+    fi
+
+    if ! command -v stty >/dev/null 2>&1
+    then
+        die \
+            "stty not found"
+
+        return 1
+    fi
+
+    return 0
 }
 
 #============================================================
-# ERR handler
+# Dependencies
+#============================================================
+
+check_dependencies()
+{
+    local required=(
+        bash
+        awk
+        sed
+        grep
+        lsblk
+        blkid
+        findmnt
+        mountpoint
+        tput
+        stty
+        base64
+    )
+
+    local command_name
+
+    for command_name in "${required[@]}"
+    do
+        if ! command -v \
+            "$command_name" \
+            >/dev/null 2>&1
+        then
+            die \
+                "Missing program: ${command_name}"
+
+            return 1
+        fi
+    done
+
+    logger_info \
+        "Bootstrap dependency check passed"
+
+    return 0
+}
+
+#============================================================
+# Boot mode detection
+#============================================================
+
+detect_boot_mode()
+{
+    local mode
+    local current
+
+    current="$(
+        config_get BOOT_MODE \
+            2>/dev/null \
+            || true
+    )"
+
+    if [[ -n "$current" ]]
+    then
+        logger_info \
+            "Boot mode loaded from configuration: ${current}"
+
+        return 0
+    fi
+
+    if [[ -d /sys/firmware/efi ]]
+    then
+        mode="UEFI"
+    else
+        mode="BIOS"
+    fi
+
+    config_set \
+        BOOT_MODE \
+        "$mode"
+
+    logger_info \
+        "Boot mode detected: ${mode}"
+
+    return 0
+}
+
+#============================================================
+# Partition table default
+#============================================================
+
+detect_partition_table()
+{
+    local boot_mode
+    local current
+    local table
+
+    current="$(
+        config_get PARTITION_TABLE \
+            2>/dev/null \
+            || true
+    )"
+
+    if [[ -n "$current" ]]
+    then
+        logger_info \
+            "Partition table loaded from configuration: ${current}"
+
+        return 0
+    fi
+
+    boot_mode="$(
+        config_get BOOT_MODE
+    )"
+
+    case "$boot_mode" in
+        UEFI)
+            table="GPT"
+            ;;
+
+        BIOS)
+            table="MBR"
+            ;;
+
+        *)
+            die \
+                "Cannot determine partition table without valid boot mode"
+
+            return 1
+            ;;
+    esac
+
+    config_set \
+        PARTITION_TABLE \
+        "$table"
+
+    logger_info \
+        "Partition table default: ${table}"
+
+    return 0
+}
+
+#============================================================
+# Load core libraries
+#============================================================
+
+load_core_libraries()
+{
+    require_lib config.sh
+    require_lib utils.sh
+    require_lib terminal.sh
+    require_lib cursor.sh
+    require_lib colors.sh
+    require_lib unicode.sh
+    require_lib tui.sh
+    require_lib screen.sh
+    require_lib draw.sh
+    require_lib input.sh
+    require_lib events.sh
+    require_lib widgets.sh
+    require_lib dialog.sh
+    require_lib progress.sh
+
+    logger_info \
+        "Core libraries loaded"
+
+    return 0
+}
+
+#============================================================
+# Load installer modules
+#============================================================
+
+load_installer_modules()
+{
+    require_installer welcome.sh
+    require_installer keyboard.sh
+    require_installer locale.sh
+    require_installer locale_generate.sh
+    require_installer network.sh
+    require_installer mirrors.sh
+
+    require_installer disks.sh
+    require_installer partition.sh
+    require_installer filesystem.sh
+    require_installer mount.sh
+    require_installer packages.sh
+
+    require_installer users.sh
+    require_installer desktop.sh
+    require_installer services.sh
+
+    require_installer bootloader.sh
+    require_installer summary.sh
+
+    require_installer installer.sh
+
+    # Dispatcher MUST be loaded last.
+    require_installer menu_main.sh
+
+    logger_info \
+        "Installer modules loaded"
+
+    return 0
+}
+
+#============================================================
+# Application initialization
+#============================================================
+
+app_init()
+{
+    logger_info \
+        "Initializing application"
+
+    terminal_init
+    colors_init
+    screen_init
+    tui_init
+
+    TUI_READY=1
+
+    if declare -F terminal_title >/dev/null 2>&1
+    then
+        terminal_title \
+            "$APP_NAME"
+    fi
+
+    tui_clear
+
+    logger_info \
+        "Application initialized"
+
+    return 0
+}
+
+#============================================================
+# Startup screen
+#============================================================
+
+draw_startup()
+{
+    logger_info \
+        "Drawing startup screen"
+
+    tui_clear
+
+    titlebar_draw \
+        "$APP_NAME"
+
+    tui_move \
+        3 \
+        5
+
+    color_info \
+        "Arch Linux Installation System"
+
+    tui_move \
+        4 \
+        5
+
+    tui_print \
+        "Initializing..."
+
+    if declare -F screen_refresh >/dev/null 2>&1
+    then
+        screen_refresh
+    fi
+
+    return 0
+}
+
+#============================================================
+# Cleanup
+#============================================================
+
+cleanup()
+{
+    local saved_rc=$?
+
+    if (( TUI_READY ))
+    then
+        if declare -F tui_restore >/dev/null 2>&1
+        then
+            tui_restore || true
+        fi
+    fi
+
+    if declare -F terminal_restore >/dev/null 2>&1
+    then
+        terminal_restore || true
+    fi
+
+    if (( LOGGER_READY ))
+    then
+        if declare -F logger_close >/dev/null 2>&1
+        then
+            logger_close || true
+        fi
+    fi
+
+    return "$saved_rc"
+}
+
+#============================================================
+# Error handler
 #============================================================
 
 on_error()
 {
-    local rc="$?"
-    local line="${BASH_LINENO[0]:-unknown}"
-    local command="${BASH_COMMAND:-unknown}"
+    local code="${1:-1}"
+    local line="${2:-unknown}"
+    local source_file="${3:-unknown}"
+    local function="${4:-unknown}"
 
-    #
-    # Do not process ERR twice.
-    #
-    if (( INSTALLER_EXITING ))
+    printf '\nFatal error.\n' >&2
+    printf 'Exit code: %s\n' "$code" >&2
+    printf 'File: %s\n' "$source_file" >&2
+    printf 'Line: %s\n' "$line" >&2
+    printf 'Function: %s\n' "$function" >&2
+
+    if declare -F logger_exception >/dev/null 2>&1
     then
-        return "$rc"
-    fi
+        logger_exception || true
 
-    if declare -F logger_error >/dev/null 2>&1
+    elif declare -F logger_error >/dev/null 2>&1
     then
         logger_error \
-            "Fatal error: rc=$rc line=$line command=$command"
-    else
-        bootstrap_log ERROR \
-            "Fatal error: rc=$rc line=$line command=$command"
+            "Fatal error: code=${code} file=${source_file} line=${line} function=${function}" \
+            || true
     fi
 
-    cleanup_tui
-
-    return "$rc"
+    exit "$code"
 }
 
 #============================================================
-# EXIT handler
+# Signals
 #============================================================
 
-on_exit()
+on_sigint()
 {
-    local rc="$?"
-
-    cleanup_tui
-
-    #
-    # Do not call exit from EXIT recursively.
-    #
-    return "$rc"
-}
-
-#============================================================
-# INT
-#============================================================
-
-on_interrupt()
-{
-    if declare -F logger_warn >/dev/null 2>&1
-    then
-        logger_warn \
-            "Installer interrupted by user"
-    else
-        bootstrap_log WARN \
-            "Installer interrupted by user"
-    fi
-
-    cleanup_tui
+    logger_warn \
+        "Interrupted (SIGINT)" \
+        || true
 
     exit 130
 }
 
-#============================================================
-# TERM
-#============================================================
-
-on_term()
+on_sigterm()
 {
-    if declare -F logger_warn >/dev/null 2>&1
-    then
-        logger_warn \
-            "Installer terminated"
-    else
-        bootstrap_log WARN \
-            "Installer terminated"
-    fi
-
-    cleanup_tui
+    logger_warn \
+        "Terminated (SIGTERM)" \
+        || true
 
     exit 143
 }
 
 #============================================================
-# Install traps
+# Traps
 #============================================================
 
-install_traps()
-{
-    trap 'on_error' ERR
-    trap 'on_exit' EXIT
-    trap 'on_interrupt' INT
-    trap 'on_term' TERM
+trap cleanup EXIT
 
-    return 0
-}
+trap \
+    'on_error "$?" "$LINENO" "${BASH_SOURCE[0]}" "${FUNCNAME[1]:-main}"' \
+    ERR
 
-#============================================================
-# Initialize logger
-#============================================================
-
-init_logger()
-{
-    if ! declare -F logger_init >/dev/null 2>&1
-    then
-        bootstrap_log ERROR \
-            "logger_init() is unavailable"
-
-        return 1
-    fi
-
-    if ! logger_init "$INSTALLER_ROOT"
-    then
-        bootstrap_log ERROR \
-            "logger_init() failed"
-
-        return 1
-    fi
-
-    return 0
-}
-
-#============================================================
-# Initialize TUI
-#============================================================
-
-init_tui()
-{
-    logger_debug \
-        "Initializing TUI"
-
-    #
-    # Initialize only.
-    #
-    if ! tui_init
-    then
-        logger_error \
-            "tui_init() failed"
-
-        return 1
-    fi
-
-    logger_debug \
-        "TUI initialized: ${TUI_COLS}x${TUI_ROWS}"
-
-    #
-    # Start TUI.
-    #
-    if ! tui_start
-    then
-        logger_error \
-            "tui_start() failed"
-
-        tui_restore || true
-
-        return 1
-    fi
-
-    logger_info \
-        "TUI started"
-
-    return 0
-}
+trap on_sigint INT
+trap on_sigterm TERM
 
 #============================================================
 # Main
@@ -627,119 +649,92 @@ init_tui()
 
 main()
 {
-    #--------------------------------------------------------
-    # Bootstrap message
-    #--------------------------------------------------------
-
-    bootstrap_log INFO \
-        "Starting $INSTALLER_NAME"
-
-    bootstrap_log DEBUG \
-        "ROOT: $INSTALLER_ROOT"
-
-    bootstrap_log DEBUG \
-        "LIB:  $INSTALLER_LIB"
-
-    bootstrap_log DEBUG \
-        "MOD:  $INSTALLER_MODULES"
-
-    #--------------------------------------------------------
-    # Install traps as early as possible
-    #--------------------------------------------------------
-
-    install_traps
-
-    #--------------------------------------------------------
-    # Logger
-    #--------------------------------------------------------
-
-    if ! load_logger
+    if ! logger_init
     then
-        bootstrap_log ERROR \
-            "Failed to load logger"
+        printf \
+            'Failed to initialize logger\n' \
+            >&2
 
         return 1
     fi
 
-    if ! init_logger
-    then
-        bootstrap_log ERROR \
-            "Failed to initialize logger"
-
-        return 1
-    fi
+    LOGGER_READY=1
 
     logger_info \
-        "$INSTALLER_NAME starting"
+        "Starting ${APP_NAME} ${APP_VERSION}"
+
+    logger_info \
+        "Project root: ${ROOT_DIR}"
 
     #--------------------------------------------------------
     # Environment
     #--------------------------------------------------------
 
-    if ! check_environment
-    then
-        logger_error \
-            "Environment check failed"
+    check_root
+    check_arch_environment
+    check_project_structure
+    check_terminal
+    check_dependencies
 
-        return 1
+    #--------------------------------------------------------
+    # Core
+    #--------------------------------------------------------
+
+    load_core_libraries
+
+    #--------------------------------------------------------
+    # Configuration
+    #--------------------------------------------------------
+
+    config_init_load
+
+    #--------------------------------------------------------
+    # Platform defaults
+    #--------------------------------------------------------
+
+    detect_boot_mode
+    detect_partition_table
+
+    #--------------------------------------------------------
+    # Validate configuration
+    #--------------------------------------------------------
+
+    if ! config_validate
+    then
+        logger_warn \
+            "Loaded configuration is incomplete; installer menu remains available"
     fi
+
+    #--------------------------------------------------------
+    # Installer modules
+    #--------------------------------------------------------
+
+    load_installer_modules
 
     #--------------------------------------------------------
     # TUI
     #--------------------------------------------------------
 
-    if ! load_tui
-    then
-        logger_error \
-            "Failed to load TUI"
-
-        return 1
-    fi
-
-    if ! init_tui
-    then
-        logger_error \
-            "Failed to initialize TUI"
-
-        return 1
-    fi
+    app_init
+    draw_startup
 
     #--------------------------------------------------------
     # Main menu
     #--------------------------------------------------------
 
-    if ! load_main_menu
-    then
-        logger_error \
-            "Failed to load main menu"
+    logger_info \
+        "Entering main menu"
 
-        return 1
-    fi
+    menu_main
 
     logger_info \
-        "Starting main menu"
+        "Main menu exited normally"
 
-    if menu_main
-    then
-        logger_info \
-            "Main menu finished successfully"
-
-        return 0
-    else
-        local rc="$?"
-
-        logger_error \
-            "Main menu finished with rc=$rc"
-
-        return "$rc"
-    fi
+    return 0
 }
 
 #============================================================
 # Entry point
 #============================================================
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]
-then
-    main "$@"
-fi
+main "$@"

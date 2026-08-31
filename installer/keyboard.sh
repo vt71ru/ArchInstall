@@ -3,7 +3,7 @@
 #============================================================
 #  Arch Installer
 #------------------------------------------------------------
-#  keyboard.sh
+#  installer/keyboard.sh
 #
 #  Настройка раскладки клавиатуры.
 #
@@ -17,17 +17,18 @@
 #   • Изменение раскладки Live ISO
 #   • Настройку target system
 #
-#  Применение к установленной системе выполняется
-#  отдельным post-install этапом.
-#
+#============================================================
+
+#============================================================
+# Load guard
 #============================================================
 
 if [[ -n "${KEYBOARD_SH_LOADED:-}" ]]
 then
-    return 0
+    return 0 2>/dev/null || exit 0
 fi
 
-readonly KEYBOARD_SH_LOADED=1
+KEYBOARD_SH_LOADED=1
 
 #============================================================
 # Available layouts
@@ -52,7 +53,9 @@ keyboard_log_info()
 {
     if declare -F logger_info >/dev/null 2>&1
     then
-        logger_info "$@"
+        logger_info "$@" || true
+    else
+        printf '[INFO] %s\n' "$*" >&2
     fi
 
     return 0
@@ -62,7 +65,9 @@ keyboard_log_warn()
 {
     if declare -F logger_warn >/dev/null 2>&1
     then
-        logger_warn "$@"
+        logger_warn "$@" || true
+    else
+        printf '[WARN] %s\n' "$*" >&2
     fi
 
     return 0
@@ -72,7 +77,9 @@ keyboard_log_error()
 {
     if declare -F logger_error >/dev/null 2>&1
     then
-        logger_error "$@"
+        logger_error "$@" || true
+    else
+        printf '[ERROR] %s\n' "$*" >&2
     fi
 
     return 0
@@ -86,6 +93,8 @@ keyboard_restore_config()
 {
     local configured=""
     local index
+
+    KEYBOARD_SELECTED=0
 
     if ! declare -F config_get >/dev/null 2>&1
     then
@@ -103,7 +112,9 @@ keyboard_restore_config()
 
     if [[ -z "$configured" ]]
     then
-        KEYBOARD_SELECTED=0
+        keyboard_log_info \
+            "No saved keyboard layout; using default: us"
+
         return 0
     fi
 
@@ -121,9 +132,44 @@ keyboard_restore_config()
     done
 
     keyboard_log_warn \
-        "Configured keyboard layout is unavailable: ${configured}"
+        "Saved keyboard layout is unavailable: ${configured}"
 
     KEYBOARD_SELECTED=0
+
+    return 0
+}
+
+#============================================================
+# Validate selection
+#============================================================
+
+keyboard_validate_selection()
+{
+    local count="${#KEYBOARD_LAYOUTS[@]}"
+
+    if (( count == 0 ))
+    then
+        keyboard_log_error \
+            "No keyboard layouts are available"
+
+        return 1
+    fi
+
+    if (( KEYBOARD_SELECTED < 0 ))
+    then
+        keyboard_log_error \
+            "Invalid keyboard selection: ${KEYBOARD_SELECTED}"
+
+        return 1
+    fi
+
+    if (( KEYBOARD_SELECTED >= count ))
+    then
+        keyboard_log_error \
+            "Keyboard selection out of range: ${KEYBOARD_SELECTED}"
+
+        return 1
+    fi
 
     return 0
 }
@@ -159,18 +205,36 @@ keyboard_draw()
 {
     local row=5
     local index
-    local width="${TUI_COLS:-80}"
+
+    #--------------------------------------------------------
+    # Clear screen
+    #--------------------------------------------------------
 
     if declare -F tui_clear >/dev/null 2>&1
     then
-        tui_clear || return 1
+        tui_clear || true
+    elif declare -F screen_prepare >/dev/null 2>&1
+    then
+        screen_prepare || true
+    else
+        printf '\033[2J\033[H'
     fi
+
+    #--------------------------------------------------------
+    # Title
+    #--------------------------------------------------------
 
     if declare -F titlebar_draw >/dev/null 2>&1
     then
         titlebar_draw \
-            "Keyboard layout" || return 1
+            "Keyboard layout" || true
+    else
+        printf '\nKeyboard layout\n'
     fi
+
+    #--------------------------------------------------------
+    # Panel
+    #--------------------------------------------------------
 
     if declare -F draw_panel >/dev/null 2>&1
     then
@@ -179,65 +243,63 @@ keyboard_draw()
             3 \
             5 \
             12 \
-            45 || return 1
+            45 || true
     fi
 
-    for (( index=0; index<${#KEYBOARD_LAYOUTS[@]} && index<KEYBOARD_VISIBLE; index++ ))
+    #--------------------------------------------------------
+    # Entries
+    #--------------------------------------------------------
+
+    for (( index=0; index<${#KEYBOARD_LAYOUTS[@]}; index++ ))
     do
-        if declare -F tui_move >/dev/null 2>&1
+        if (( index >= KEYBOARD_VISIBLE ))
         then
-            tui_move \
-                "$row" \
-                8 || return 1
-        elif declare -F cursor_move >/dev/null 2>&1
+            break
+        fi
+
+        if declare -F cursor_move >/dev/null 2>&1
         then
             cursor_move \
                 "$row" \
-                8 || return 1
+                8 || true
+        elif declare -F tui_move >/dev/null 2>&1
+        then
+            tui_move \
+                "$row" \
+                8 || true
         else
             printf '\n'
         fi
 
         if (( index == KEYBOARD_SELECTED ))
         then
-            if declare -F color_selected >/dev/null 2>&1
-            then
-                color_selected \
-                    "> ${KEYBOARD_LAYOUTS[index]}"
-            elif declare -F tui_print >/dev/null 2>&1
-            then
-                tui_print \
-                    "> ${KEYBOARD_LAYOUTS[index]}"
-            else
-                printf '> %s' \
-                    "${KEYBOARD_LAYOUTS[index]}"
-            fi
+            printf '> %s' \
+                "${KEYBOARD_LAYOUTS[index]}"
         else
-            if declare -F tui_print >/dev/null 2>&1
-            then
-                tui_print \
-                    "  ${KEYBOARD_LAYOUTS[index]}"
-            else
-                printf '  %s' \
-                    "${KEYBOARD_LAYOUTS[index]}"
-            fi
+            printf '  %s' \
+                "${KEYBOARD_LAYOUTS[index]}"
         fi
 
         row=$((row + 1))
     done
 
+    #--------------------------------------------------------
+    # Status bar
+    #--------------------------------------------------------
+
     if declare -F statusbar_draw >/dev/null 2>&1
     then
         statusbar_draw \
-            "↑↓ Select   Enter Apply   Esc Back" \
-            || return 1
+            "↑↓ Select   Enter Apply   Esc Back" || true
     fi
+
+    #--------------------------------------------------------
+    # Refresh
+    #--------------------------------------------------------
 
     if declare -F screen_refresh >/dev/null 2>&1
     then
-        screen_refresh \
-            2>/dev/null \
-            || true
+        screen_refresh || true
     fi
 
     return 0
@@ -249,11 +311,18 @@ keyboard_draw()
 
 keyboard_previous()
 {
+    local count="${#KEYBOARD_LAYOUTS[@]}"
+
+    if (( count == 0 ))
+    then
+        return 1
+    fi
+
     if (( KEYBOARD_SELECTED > 0 ))
     then
         KEYBOARD_SELECTED=$((KEYBOARD_SELECTED - 1))
     else
-        KEYBOARD_SELECTED=$(( ${#KEYBOARD_LAYOUTS[@]} - 1 ))
+        KEYBOARD_SELECTED=$((count - 1))
     fi
 
     return 0
@@ -261,7 +330,14 @@ keyboard_previous()
 
 keyboard_next()
 {
-    if (( KEYBOARD_SELECTED < ${#KEYBOARD_LAYOUTS[@]} - 1 ))
+    local count="${#KEYBOARD_LAYOUTS[@]}"
+
+    if (( count == 0 ))
+    then
+        return 1
+    fi
+
+    if (( KEYBOARD_SELECTED < count - 1 ))
     then
         KEYBOARD_SELECTED=$((KEYBOARD_SELECTED + 1))
     else
@@ -279,31 +355,27 @@ keyboard_apply()
 {
     local layout=""
 
-    if (( KEYBOARD_SELECTED < 0 ))
-    then
-        keyboard_log_error \
-            "Invalid keyboard selection index: ${KEYBOARD_SELECTED}"
+    #--------------------------------------------------------
+    # Validate index
+    #--------------------------------------------------------
 
-        return 1
-    fi
+    keyboard_validate_selection || return 1
 
-    if (( KEYBOARD_SELECTED >= ${#KEYBOARD_LAYOUTS[@]} ))
-    then
-        keyboard_log_error \
-            "Keyboard selection index out of range: ${KEYBOARD_SELECTED}"
-
-        return 1
-    fi
+    #--------------------------------------------------------
+    # Get layout
+    #--------------------------------------------------------
 
     layout="${KEYBOARD_LAYOUTS[KEYBOARD_SELECTED]}"
 
-    if ! keyboard_validate_layout "$layout"
-    then
-        return 1
-    fi
+    #--------------------------------------------------------
+    # Validate layout
+    #--------------------------------------------------------
+
+    keyboard_validate_layout \
+        "$layout" || return 1
 
     #--------------------------------------------------------
-    # Save configuration
+    # Check config_set
     #--------------------------------------------------------
 
     if ! declare -F config_set >/dev/null 2>&1
@@ -314,6 +386,10 @@ keyboard_apply()
         return 1
     fi
 
+    #--------------------------------------------------------
+    # Save SYSTEM_KEYMAP
+    #--------------------------------------------------------
+
     if ! config_set \
         SYSTEM_KEYMAP \
         "$layout"
@@ -323,6 +399,10 @@ keyboard_apply()
 
         return 1
     fi
+
+    #--------------------------------------------------------
+    # Save configuration
+    #--------------------------------------------------------
 
     if declare -F config_save >/dev/null 2>&1
     then
@@ -353,7 +433,7 @@ keyboard()
         "Keyboard configuration started"
 
     #--------------------------------------------------------
-    # Restore saved configuration
+    # Restore saved value
     #--------------------------------------------------------
 
     keyboard_restore_config || return 1
@@ -364,18 +444,33 @@ keyboard()
 
     while true
     do
+        #----------------------------------------------------
+        # Draw
+        #----------------------------------------------------
+
         if ! keyboard_draw
         then
             keyboard_log_error \
-                "Failed to draw keyboard configuration screen"
+                "Failed to draw keyboard screen"
 
             return 1
         fi
 
         #----------------------------------------------------
-        # event_read() in this project stores the result in
-        # TUI_EVENT. Do not use command substitution here.
+        # Read event
+        #
+        # IMPORTANT:
+        # event_read() must store result in TUI_EVENT.
+        #
+        # Do NOT use:
+        #
+        # event="$(event_read)"
+        #
+        # because event_read() belongs to the TUI event
+        # subsystem and may use the return code for errors.
         #----------------------------------------------------
+
+        TUI_EVENT=""
 
         if ! event_read
         then
@@ -387,58 +482,39 @@ keyboard()
 
         event="${TUI_EVENT:-}"
 
+        #----------------------------------------------------
+        # Process event
+        #----------------------------------------------------
+
         case "$event"
         in
-
-            #------------------------------------------------
-            # Up
-            #------------------------------------------------
 
             "$EVENT_UP")
                 keyboard_previous
                 ;;
 
-            #------------------------------------------------
-            # Down
-            #------------------------------------------------
-
             "$EVENT_DOWN")
                 keyboard_next
                 ;;
 
-            #------------------------------------------------
-            # Enter
-            #
-            # IMPORTANT:
-            # After successful Apply we RETURN from keyboard().
-            # This allows installer_full_install() to continue
-            # with the next stage: locale.
-            #------------------------------------------------
-
             "$EVENT_SELECT")
 
-                if ! keyboard_apply
-                then
-                    keyboard_log_error \
-                        "Failed to apply keyboard layout"
+                #--------------------------------------------
+                # Enter = apply and EXIT keyboard stage
+                #--------------------------------------------
 
-                    continue
+                if keyboard_apply
+                then
+                    keyboard_log_info \
+                        "Keyboard configuration completed"
+
+                    return 0
                 fi
 
-                keyboard_log_info \
-                    "Keyboard configuration completed"
+                keyboard_log_error \
+                    "Failed to apply keyboard layout"
 
-                return 0
                 ;;
-
-            #------------------------------------------------
-            # Escape
-            #
-            # In a full installation Esc should NOT silently
-            # report success. Otherwise the controller would
-            # continue to the next installation stage without
-            # a valid keyboard selection.
-            #------------------------------------------------
 
             "$EVENT_BACK")
 
@@ -448,14 +524,13 @@ keyboard()
                 return 1
                 ;;
 
-            #------------------------------------------------
-            # Unknown event
-            #------------------------------------------------
-
             *)
+
                 keyboard_log_warn \
                     "Unknown keyboard event: ${event:-<empty>}"
+
                 ;;
         esac
     done
 }
+

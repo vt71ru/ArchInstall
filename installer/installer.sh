@@ -1,4 +1,3 @@
-```bash
 #!/usr/bin/env bash
 #
 #============================================================
@@ -9,13 +8,13 @@
 # Центральный controller установки.
 #
 # Ответственность:
-#   • запуск главного меню
+#   • управление этапами установки
 #   • запуск отдельных этапов
 #   • запуск полной установки
 #   • контроль порядка этапов
-#   • проверка entry point
-#   • обработка ошибок
-#   • возврат кодов завершения
+#   • проверка API этапов
+#   • хранение состояния выполнения
+#   • возврат кодов ошибок
 #
 # Не отвечает за:
 #   • загрузку библиотек
@@ -23,8 +22,12 @@
 #   • проверку Arch Linux
 #   • проверку root
 #   • инициализацию TUI
-#   • хранение конфигурации
+#   • хранение CONFIG
 #
+#============================================================
+
+#============================================================
+# Include guard
 #============================================================
 
 if [[ -n "${ARCH_INSTALLER_INSTALLER_SH_LOADED:-}" ]]
@@ -33,6 +36,19 @@ then
 fi
 
 readonly ARCH_INSTALLER_INSTALLER_SH_LOADED=1
+
+#============================================================
+# Controller state
+#============================================================
+
+INSTALLER_CURRENT_STAGE=""
+INSTALLER_CURRENT_TITLE=""
+INSTALLER_LAST_FUNCTION=""
+INSTALLER_LAST_MESSAGE=""
+INSTALLER_LAST_RC=0
+INSTALLER_STEP=0
+INSTALLER_TOTAL_STEPS=0
+INSTALLER_RUNNING=0
 
 #============================================================
 # Logging helpers
@@ -49,6 +65,8 @@ installer_log()
     fi
 
     printf '%s\n' "$message"
+
+    return 0
 }
 
 installer_log_info()
@@ -62,6 +80,8 @@ installer_log_info()
     fi
 
     printf '[INFO] %s\n' "$message"
+
+    return 0
 }
 
 installer_log_warn()
@@ -75,6 +95,8 @@ installer_log_warn()
     fi
 
     printf '[WARN] %s\n' "$message" >&2
+
+    return 0
 }
 
 installer_log_error()
@@ -88,91 +110,19 @@ installer_log_error()
     fi
 
     printf '[ERROR] %s\n' "$message" >&2
+
+    return 0
 }
 
 #============================================================
-# Stage -> function mapping
+# Controller state getters
 #============================================================
 
-installer_get_stage_function()
+installer_get_stage()
 {
-    local stage="${1:-}"
-
-    case "$stage"
-    in
-        welcome)
-            printf '%s\n' 'welcome'
-            ;;
-
-        keyboard)
-            printf '%s\n' 'keyboard'
-            ;;
-
-        locale)
-            printf '%s\n' 'locale'
-            ;;
-
-        locale_generate)
-            printf '%s\n' 'locale_generate'
-            ;;
-
-        network)
-            printf '%s\n' 'network'
-            ;;
-
-        mirrors)
-            printf '%s\n' 'mirrors'
-            ;;
-
-        disks)
-            printf '%s\n' 'disks'
-            ;;
-
-        partition)
-            printf '%s\n' 'partition'
-            ;;
-
-        filesystem)
-            printf '%s\n' 'filesystem'
-            ;;
-
-        mount)
-            printf '%s\n' 'mount'
-            ;;
-
-        packages)
-            printf '%s\n' 'packages_install'
-            ;;
-
-        users)
-            printf '%s\n' 'users_configure'
-            ;;
-
-        desktop)
-            printf '%s\n' 'desktop_install'
-            ;;
-
-        services)
-            printf '%s\n' 'services_configure'
-            ;;
-
-        bootloader)
-            printf '%s\n' 'bootloader_install'
-            ;;
-
-        summary)
-            printf '%s\n' 'summary_show'
-            ;;
-
-        *)
-            return 1
-            ;;
-    esac
+    printf '%s\n' \
+        "${INSTALLER_CURRENT_STAGE:-}"
 }
-
-#============================================================
-# Stage title
-#============================================================
 
 installer_get_stage_title()
 {
@@ -250,8 +200,115 @@ installer_get_stage_title()
     esac
 }
 
+installer_get_last_function()
+{
+    printf '%s\n' \
+        "${INSTALLER_LAST_FUNCTION:-unknown}"
+}
+
+installer_get_last_message()
+{
+    printf '%s\n' \
+        "${INSTALLER_LAST_MESSAGE:-unknown}"
+}
+
+installer_get_last_rc()
+{
+    printf '%s\n' \
+        "${INSTALLER_LAST_RC:-0}"
+}
+
 #============================================================
-# Full installation order
+# Stage -> function mapping
+#
+# IMPORTANT:
+# Function names here MUST match the functions exported by
+# the corresponding installer/*.sh modules.
+#============================================================
+
+installer_get_stage_function()
+{
+    local stage="${1:-}"
+
+    case "$stage"
+    in
+        welcome)
+            printf '%s\n' 'welcome'
+            ;;
+
+        keyboard)
+            printf '%s\n' 'keyboard'
+            ;;
+
+        locale)
+            printf '%s\n' 'locale'
+            ;;
+
+        locale_generate)
+            printf '%s\n' 'locale_generate'
+            ;;
+
+        network)
+            printf '%s\n' 'network'
+            ;;
+
+        mirrors)
+            printf '%s\n' 'mirrors'
+            ;;
+
+        disks)
+            printf '%s\n' 'disks'
+            ;;
+
+        partition)
+            printf '%s\n' 'installer_partition'
+            ;;
+
+        filesystem)
+            printf '%s\n' 'installer_filesystem'
+            ;;
+
+        mount)
+            printf '%s\n' 'installer_mount'
+            ;;
+
+        packages)
+            printf '%s\n' 'installer_packages'
+            ;;
+
+        users)
+            printf '%s\n' 'installer_users'
+            ;;
+
+        desktop)
+            printf '%s\n' 'installer_desktop'
+            ;;
+
+        services)
+            printf '%s\n' 'installer_services'
+            ;;
+
+        bootloader)
+            printf '%s\n' 'installer_bootloader'
+            ;;
+
+        summary)
+            printf '%s\n' 'installer_summary'
+            ;;
+
+        *)
+            return 1
+            ;;
+    esac
+
+    return 0
+}
+
+#============================================================
+# Full installation stage list
+#
+# welcome is intentionally excluded because it is a screen,
+# not an installation operation.
 #============================================================
 
 installer_full_installation_stages()
@@ -259,6 +316,7 @@ installer_full_installation_stages()
     cat <<'EOF'
 keyboard
 locale
+locale_generate
 network
 mirrors
 disks
@@ -272,6 +330,72 @@ services
 bootloader
 summary
 EOF
+
+    return 0
+}
+
+#============================================================
+# Count installation stages
+#============================================================
+
+installer_count_stages()
+{
+    local count=0
+    local stage
+
+    while IFS= read -r stage
+    do
+        [[ -z "$stage" ]] && continue
+
+        count=$((count + 1))
+    done < <(
+        installer_full_installation_stages
+    )
+
+    printf '%s\n' "$count"
+
+    return 0
+}
+
+#============================================================
+# Set failure state
+#============================================================
+
+installer_set_failure()
+{
+    local stage="${1:-unknown}"
+    local function_name="${2:-unknown}"
+    local rc="${3:-1}"
+    local message="${4:-Stage failed}"
+
+    INSTALLER_CURRENT_STAGE="$stage"
+    INSTALLER_CURRENT_TITLE="$(
+        installer_get_stage_title "$stage"
+    )"
+
+    INSTALLER_LAST_FUNCTION="$function_name"
+    INSTALLER_LAST_MESSAGE="$message"
+    INSTALLER_LAST_RC="$rc"
+
+    return 0
+}
+
+#============================================================
+# Reset controller state
+#============================================================
+
+installer_reset_state()
+{
+    INSTALLER_CURRENT_STAGE=""
+    INSTALLER_CURRENT_TITLE=""
+    INSTALLER_LAST_FUNCTION=""
+    INSTALLER_LAST_MESSAGE=""
+    INSTALLER_LAST_RC=0
+    INSTALLER_STEP=0
+    INSTALLER_TOTAL_STEPS=0
+    INSTALLER_RUNNING=0
+
+    return 0
 }
 
 #============================================================
@@ -281,7 +405,7 @@ EOF
 installer_check_stage()
 {
     local stage="${1:-}"
-    local function_name
+    local function_name=""
 
     if [[ -z "$stage" ]]
     then
@@ -291,14 +415,23 @@ installer_check_stage()
         return 1
     fi
 
-    function_name="$(
+    if ! function_name="$(
         installer_get_stage_function "$stage"
-    )" || {
+    )"
+    then
         installer_log_error \
-            "Unknown installer stage: $stage"
+            "Unknown installer stage: ${stage}"
 
         return 1
-    }
+    fi
+
+    if [[ -z "$function_name" ]]
+    then
+        installer_log_error \
+            "Empty function for stage: ${stage}"
+
+        return 1
+    fi
 
     if ! declare -F "$function_name" >/dev/null 2>&1
     then
@@ -319,6 +452,9 @@ installer_check_all_stages()
 {
     local stage
 
+    installer_log_info \
+        "Checking all installer stages"
+
     while IFS= read -r stage
     do
         [[ -z "$stage" ]] && continue
@@ -326,11 +462,23 @@ installer_check_all_stages()
         installer_log_info \
             "Checking stage: ${stage}"
 
-        installer_check_stage "$stage" || return 1
+        if ! installer_check_stage "$stage"
+        then
+            installer_set_failure \
+                "$stage" \
+                "unknown" \
+                1 \
+                "Required stage function is missing"
+
+            return 1
+        fi
 
     done < <(
         installer_full_installation_stages
     )
+
+    installer_log_info \
+        "All installer stages are available"
 
     return 0
 }
@@ -342,26 +490,39 @@ installer_check_all_stages()
 installer_run_stage()
 {
     local stage="${1:-}"
-    local function_name
-    local title
-    local rc
+    local function_name=""
+    local title=""
+    local rc=0
 
     if [[ -z "$stage" ]]
     then
         installer_log_error \
             "installer_run_stage: empty stage"
 
+        installer_set_failure \
+            "unknown" \
+            "unknown" \
+            1 \
+            "Empty installer stage"
+
         return 1
     fi
 
-    function_name="$(
+    if ! function_name="$(
         installer_get_stage_function "$stage"
-    )" || {
+    )"
+    then
         installer_log_error \
-            "Unknown installer stage: $stage"
+            "Unknown installer stage: ${stage}"
+
+        installer_set_failure \
+            "$stage" \
+            "unknown" \
+            1 \
+            "Unknown installer stage"
 
         return 1
-    }
+    fi
 
     title="$(
         installer_get_stage_title "$stage"
@@ -372,25 +533,67 @@ installer_run_stage()
         installer_log_error \
             "Function not found: ${function_name}"
 
+        installer_set_failure \
+            "$stage" \
+            "$function_name" \
+            127 \
+            "Stage function is not loaded"
+
         return 127
     fi
 
-    installer_log_info \
-        "Starting: ${title}"
+    INSTALLER_CURRENT_STAGE="$stage"
+    INSTALLER_CURRENT_TITLE="$title"
+    INSTALLER_LAST_FUNCTION="$function_name"
+    INSTALLER_LAST_MESSAGE=""
+    INSTALLER_LAST_RC=0
 
-    "$function_name"
-    rc=$?
+    installer_log_info \
+        "Starting stage: ${title}"
+
+    installer_log_info \
+        "Function: ${function_name}"
+
+    #--------------------------------------------------------
+    # IMPORTANT:
+    # Do NOT call:
+    #
+    #     "$function_name"
+    #     rc=$?
+    #
+    # directly under set -e.
+    #
+    #--------------------------------------------------------
+
+    if "$function_name"
+    then
+        rc=0
+    else
+        rc=$?
+    fi
+
+    INSTALLER_LAST_RC="$rc"
 
     if (( rc != 0 ))
     then
+        INSTALLER_LAST_MESSAGE="Stage returned error"
+
         installer_log_error \
-            "Stage failed: ${title} (exit code ${rc})"
+            "Stage failed: ${title}"
+
+        installer_log_error \
+            "Function: ${function_name}"
+
+        installer_log_error \
+            "Return code: ${rc}"
 
         return "$rc"
     fi
 
+    INSTALLER_LAST_MESSAGE="Stage completed successfully"
+
     installer_log_info \
-        "Completed: ${title}"
+        "Stage completed: ${title}"
 
     return 0
 }
@@ -401,11 +604,16 @@ installer_run_stage()
 
 installer_full_install()
 {
-    local stage
-    local title
-    local rc
+    local stage=""
+    local title=""
+    local function_name=""
+    local rc=0
     local step=0
-    local total
+    local total=0
+
+    installer_reset_state
+
+    INSTALLER_RUNNING=1
 
     installer_log_info \
         "=========================================="
@@ -416,21 +624,35 @@ installer_full_install()
     installer_log_info \
         "=========================================="
 
+    #--------------------------------------------------------
+    # Validate all required functions BEFORE doing anything
+    #--------------------------------------------------------
+
     if ! installer_check_all_stages
     then
+        INSTALLER_RUNNING=0
+
         installer_log_error \
             "Full installation cannot start"
 
         installer_log_error \
-            "One or more installer stages are missing"
+            "One or more installer stages are unavailable"
 
         return 1
     fi
 
     total="$(
-        installer_full_installation_stages |
-            grep -c .
+        installer_count_stages
     )"
+
+    INSTALLER_TOTAL_STEPS="$total"
+
+    installer_log_info \
+        "Total installation stages: ${total}"
+
+    #--------------------------------------------------------
+    # Execute stages
+    #--------------------------------------------------------
 
     while IFS= read -r stage
     do
@@ -438,51 +660,147 @@ installer_full_install()
 
         step=$((step + 1))
 
+        INSTALLER_STEP="$step"
+        INSTALLER_CURRENT_STAGE="$stage"
+
         title="$(
             installer_get_stage_title "$stage"
         )"
 
+        function_name="$(
+            installer_get_stage_function "$stage"
+        )"
+
+        INSTALLER_CURRENT_TITLE="$title"
+        INSTALLER_LAST_FUNCTION="$function_name"
+        INSTALLER_LAST_MESSAGE=""
+        INSTALLER_LAST_RC=0
+
+        installer_log_info \
+            "=========================================="
+
         installer_log_info \
             "STEP ${step}/${total}: ${title}"
 
+        installer_log_info \
+            "Function: ${function_name}"
+
+        installer_log_info \
+            "=========================================="
+
+        #----------------------------------------------------
+        # Run stage safely under set -e
+        #----------------------------------------------------
+
         if installer_run_stage "$stage"
         then
-            continue
+            rc=0
+        else
+            rc=$?
         fi
 
-        rc=$?
+        if (( rc != 0 ))
+        then
+            INSTALLER_RUNNING=0
+            INSTALLER_LAST_RC="$rc"
 
-        installer_log_error \
-            "=========================================="
+            installer_log_error \
+                "=========================================="
 
-        installer_log_error \
-            "Full installation FAILED"
+            installer_log_error \
+                "FULL INSTALLATION FAILED"
 
-        installer_log_error \
-            "Failed stage: ${title}"
+            installer_log_error \
+                "Failed stage : ${title}"
 
-        installer_log_error \
-            "Exit code: ${rc}"
+            installer_log_error \
+                "Function     : ${function_name}"
 
-        installer_log_error \
-            "=========================================="
+            installer_log_error \
+                "Return code  : ${rc}"
 
-        return "$rc"
+            installer_log_error \
+                "Message      : ${INSTALLER_LAST_MESSAGE:-unknown}"
+
+            installer_log_error \
+                "=========================================="
+
+            return "$rc"
+        fi
 
     done < <(
         installer_full_installation_stages
     )
 
+    #--------------------------------------------------------
+    # Success
+    #--------------------------------------------------------
+
+    INSTALLER_RUNNING=0
+    INSTALLER_LAST_RC=0
+    INSTALLER_LAST_MESSAGE="Full installation completed successfully"
+
     installer_log_info \
         "=========================================="
 
     installer_log_info \
-        "Full installation completed successfully"
+        "FULL INSTALLATION COMPLETED SUCCESSFULLY"
 
     installer_log_info \
         "=========================================="
 
     return 0
+}
+
+#============================================================
+# Individual installer operations
+#
+# These functions are the public API used by menu_main.sh.
+#============================================================
+
+installer_partition()
+{
+    installer_run_stage partition
+}
+
+installer_filesystem()
+{
+    installer_run_stage filesystem
+}
+
+installer_mount()
+{
+    installer_run_stage mount
+}
+
+installer_packages()
+{
+    installer_run_stage packages
+}
+
+installer_users()
+{
+    installer_run_stage users
+}
+
+installer_desktop()
+{
+    installer_run_stage desktop
+}
+
+installer_services()
+{
+    installer_run_stage services
+}
+
+installer_bootloader()
+{
+    installer_run_stage bootloader
+}
+
+installer_summary()
+{
+    installer_run_stage summary
 }
 
 #============================================================
@@ -499,12 +817,20 @@ installer_run()
             installer_full_install
             ;;
 
+        welcome)
+            installer_run_stage welcome
+            ;;
+
         keyboard)
             installer_run_stage keyboard
             ;;
 
         locale)
             installer_run_stage locale
+            ;;
+
+        locale_generate)
+            installer_run_stage locale_generate
             ;;
 
         network)
@@ -520,44 +846,47 @@ installer_run()
             ;;
 
         partition|part)
-            installer_run_stage partition
+            installer_partition
             ;;
 
         filesystem|fs)
-            installer_run_stage filesystem
+            installer_filesystem
             ;;
 
         mount)
-            installer_run_stage mount
+            installer_mount
             ;;
 
         packages|pkg)
-            installer_run_stage packages
+            installer_packages
             ;;
 
         users|user)
-            installer_run_stage users
+            installer_users
             ;;
 
         desktop)
-            installer_run_stage desktop
+            installer_desktop
             ;;
 
         services)
-            installer_run_stage services
+            installer_services
             ;;
 
         bootloader|boot)
-            installer_run_stage bootloader
+            installer_bootloader
             ;;
 
         summary)
-            installer_run_stage summary
+            installer_summary
             ;;
 
         *)
             installer_log_error \
                 "Unknown installer operation: ${operation:-<empty>}"
+
+            INSTALLER_LAST_RC=2
+            INSTALLER_LAST_MESSAGE="Unknown installer operation"
 
             return 2
             ;;
@@ -623,12 +952,10 @@ run_installation_stage()
 }
 
 #============================================================
-# Direct execution
+# End of controller
+#
+# installer.sh is sourced by install.sh.
+# It must NOT start itself when sourced.
 #============================================================
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]
-then
-    installer_main "$@"
-    exit $?
-fi
-```
+return 0 2>/dev/null || true

@@ -15,9 +15,42 @@
 #   • определение boot mode
 #   • определение partition table
 #   • загрузка installer modules
+#   • загрузка installer controller
 #   • запуск TUI
 #   • запуск main menu
 #   • корректное завершение
+#
+# Не выполняет установку напрямую.
+#
+# Архитектура загрузки:
+#
+#   install.sh
+#       │
+#       ├── logger.sh
+#       ├── config.sh
+#       ├── common.sh
+#       ├── tui.sh
+#       │
+#       ├── welcome.sh
+#       ├── keyboard.sh
+#       ├── locale.sh
+#       ├── locale_generate.sh
+#       ├── network.sh
+#       ├── mirrors.sh
+#       ├── disks.sh
+#       ├── partition.sh
+#       ├── filesystem.sh
+#       ├── mount.sh
+#       ├── packages.sh
+#       ├── users.sh
+#       ├── desktop.sh
+#       ├── services.sh
+#       ├── bootloader.sh
+#       ├── summary.sh
+#       │
+#       ├── installer.sh
+#       │
+#       └── menu_main.sh
 #
 #============================================================
 
@@ -169,7 +202,10 @@ close_terminal_fd()
 {
     if [[ -n "${TUI_TTY_FD:-}" ]]
     then
-        eval "exec ${TUI_TTY_FD}>&-" 2>/dev/null || true
+        eval \
+            "exec ${TUI_TTY_FD}>&-" \
+            2>/dev/null \
+            || true
 
         TUI_TTY_FD=""
 
@@ -187,6 +223,7 @@ load_module()
 {
     local kind="${1:-}"
     local name="${2:-}"
+
     local directory
     local file
 
@@ -579,6 +616,10 @@ detect_partition_table()
 
 load_installer_modules()
 {
+    #--------------------------------------------------------
+    # Basic installation modules
+    #--------------------------------------------------------
+
     require_installer \
         welcome.sh
 
@@ -599,6 +640,10 @@ load_installer_modules()
 
     require_installer \
         disks.sh
+
+    #--------------------------------------------------------
+    # Installation stages
+    #--------------------------------------------------------
 
     require_installer \
         partition.sh
@@ -627,7 +672,21 @@ load_installer_modules()
     require_installer \
         summary.sh
 
-    # menu_main.sh MUST be loaded last.
+    #--------------------------------------------------------
+    # Central installer controller
+    #
+    # MUST be loaded before menu_main.sh
+    #--------------------------------------------------------
+
+    require_installer \
+        installer.sh
+
+    #--------------------------------------------------------
+    # Main menu
+    #
+    # MUST be loaded last
+    #--------------------------------------------------------
+
     require_installer \
         menu_main.sh
 
@@ -715,6 +774,10 @@ cleanup()
 
     INSTALLER_EXITING=1
 
+    #--------------------------------------------------------
+    # Restore TUI
+    #--------------------------------------------------------
+
     if (( TUI_READY ))
     then
         if declare -F tui_restore >/dev/null 2>&1
@@ -725,12 +788,24 @@ cleanup()
         TUI_READY=0
     fi
 
+    #--------------------------------------------------------
+    # Restore terminal
+    #--------------------------------------------------------
+
     if declare -F terminal_restore >/dev/null 2>&1
     then
         terminal_restore || true
     fi
 
+    #--------------------------------------------------------
+    # Close controlling terminal FD
+    #--------------------------------------------------------
+
     close_terminal_fd
+
+    #--------------------------------------------------------
+    # Close logger
+    #--------------------------------------------------------
 
     if (( LOGGER_READY ))
     then
@@ -799,18 +874,24 @@ on_error()
 
 on_sigint()
 {
-    logger_warn \
-        "Interrupted by user" \
-        || true
+    if declare -F logger_warn >/dev/null 2>&1
+    then
+        logger_warn \
+            "Interrupted by user" \
+            || true
+    fi
 
     exit 130
 }
 
 on_sigterm()
 {
-    logger_warn \
-        "Terminated by SIGTERM" \
-        || true
+    if declare -F logger_warn >/dev/null 2>&1
+    then
+        logger_warn \
+            "Terminated by SIGTERM" \
+            || true
+    fi
 
     exit 143
 }
@@ -834,6 +915,10 @@ trap on_sigterm TERM
 
 main()
 {
+    #--------------------------------------------------------
+    # Bootstrap information
+    #--------------------------------------------------------
+
     bootstrap_output \
         "${APP_NAME} ${APP_VERSION}"
 

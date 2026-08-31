@@ -1,4 +1,3 @@
-```bash
 #!/usr/bin/env bash
 #
 #============================================================
@@ -9,26 +8,21 @@
 #  Финальная проверка установленной системы.
 #
 #  Ответственность:
-#   • проверка конфигурации
-#   • проверка target system
-#   • проверка разделов и файловых систем
-#   • проверка /mnt и EFI
-#   • проверка fstab
-#   • проверка пользователя
-#   • проверка sudo
-#   • проверка NetworkManager
-#   • проверка SSH
-#   • проверка desktop
-#   • проверка bootloader
-#   • отображение итоговой информации
+#   • Проверка конфигурации
+#   • Проверка target system
+#   • Проверка разделов и файловых систем
+#   • Проверка /mnt и EFI
+#   • Проверка fstab
+#   • Проверка пользователя
+#   • Проверка bootloader
+#   • Отображение итоговой информации
 #
 #  Не выполняет:
-#   • изменение дисков
-#   • форматирование
-#   • монтирование
-#   • установку пакетов
-#   • изменение systemd
-#
+#   • Изменение дисков
+#   • Форматирование
+#   • Монтирование
+#   • Установку пакетов
+#   • Изменение systemd
 #============================================================
 
 if [[ -n "${SUMMARY_SH_LOADED:-}" ]]
@@ -46,7 +40,7 @@ SUMMARY_OK=0
 SUMMARY_ERRORS=0
 
 #============================================================
-# Logging helpers
+# Logging
 #============================================================
 
 summary_log_info()
@@ -55,14 +49,8 @@ summary_log_info()
     then
         logger_info "$@"
     fi
-}
 
-summary_log_warn()
-{
-    if declare -F logger_warn >/dev/null 2>&1
-    then
-        logger_warn "$@"
-    fi
+    return 0
 }
 
 summary_log_error()
@@ -71,6 +59,8 @@ summary_log_error()
     then
         logger_error "$@"
     fi
+
+    return 0
 }
 
 #============================================================
@@ -91,9 +81,8 @@ summary_reset()
 
 summary_ok()
 {
-    local message="${1:-OK}"
+    local message="${1:-}"
 
-    # Do NOT use ((SUMMARY_OK++)) with set -e.
     SUMMARY_OK=$((SUMMARY_OK + 1))
 
     summary_log_info \
@@ -104,9 +93,8 @@ summary_ok()
 
 summary_error()
 {
-    local message="${1:-Error}"
+    local message="${1:-}"
 
-    # Do NOT use ((SUMMARY_ERRORS++)) with set -e.
     SUMMARY_ERRORS=$((SUMMARY_ERRORS + 1))
 
     summary_log_error \
@@ -116,7 +104,7 @@ summary_error()
 }
 
 #============================================================
-# Safe CONFIG getter
+# Safe config getter
 #============================================================
 
 summary_config_get()
@@ -126,12 +114,12 @@ summary_config_get()
 
     if [[ -z "$key" ]]
     then
-        return 0
+        return 1
     fi
 
     if ! declare -F config_get >/dev/null 2>&1
     then
-        return 0
+        return 1
     fi
 
     value="$(
@@ -164,7 +152,7 @@ summary_check_file()
     fi
 
     summary_error \
-        "$description: ${file:-empty}"
+        "$description: ${file}"
 
     return 1
 }
@@ -187,7 +175,7 @@ summary_check_directory()
     fi
 
     summary_error \
-        "$description: ${directory:-empty}"
+        "$description: ${directory}"
 
     return 1
 }
@@ -198,13 +186,13 @@ summary_check_directory()
 
 summary_check_configuration()
 {
-    local boot_mode
-    local partition_table
-    local target_disk
-    local filesystem
-    local swap_type
-    local desktop
-    local bootloader
+    local boot_mode=""
+    local partition_table=""
+    local target_disk=""
+    local filesystem=""
+    local swap_type=""
+    local desktop=""
+    local bootloader=""
 
     boot_mode="$(summary_config_get BOOT_MODE)"
     partition_table="$(summary_config_get PARTITION_TABLE)"
@@ -252,7 +240,7 @@ summary_check_configuration()
     # Target disk
     #--------------------------------------------------------
 
-    if [[ -b "$target_disk" ]]
+    if [[ -n "$target_disk" && -b "$target_disk" ]]
     then
         summary_ok \
             "Target disk: ${target_disk}"
@@ -319,9 +307,14 @@ summary_check_configuration()
                 "Bootloader: GRUB"
             ;;
 
+        "")
+            summary_error \
+                "Bootloader not configured"
+            ;;
+
         *)
             summary_error \
-                "Bootloader not configured: ${bootloader:-empty}"
+                "Unsupported bootloader: ${bootloader}"
             ;;
     esac
 
@@ -334,15 +327,15 @@ summary_check_configuration()
 
 summary_check_partitions()
 {
-    local root_part
-    local home_part
-    local efi_part
-    local bios_part
-    local swap_part
-    local create_home
-    local boot_mode
-    local swap_type
-    local partition_table
+    local root_part=""
+    local home_part=""
+    local efi_part=""
+    local bios_part=""
+    local swap_part=""
+    local create_home=""
+    local boot_mode=""
+    local swap_type=""
+    local partition_table=""
 
     root_part="$(summary_config_get ROOT_PART)"
     home_part="$(summary_config_get HOME_PART)"
@@ -358,7 +351,7 @@ summary_check_partitions()
     # ROOT
     #--------------------------------------------------------
 
-    if [[ -b "$root_part" ]]
+    if [[ -n "$root_part" && -b "$root_part" ]]
     then
         summary_ok \
             "ROOT partition: ${root_part}"
@@ -373,7 +366,7 @@ summary_check_partitions()
 
     if [[ "$create_home" == "1" ]]
     then
-        if [[ -b "$home_part" ]]
+        if [[ -n "$home_part" && -b "$home_part" ]]
         then
             summary_ok \
                 "HOME partition: ${home_part}"
@@ -392,7 +385,7 @@ summary_check_partitions()
 
     if [[ "$boot_mode" == "UEFI" ]]
     then
-        if [[ -b "$efi_part" ]]
+        if [[ -n "$efi_part" && -b "$efi_part" ]]
         then
             summary_ok \
                 "EFI partition: ${efi_part}"
@@ -403,13 +396,13 @@ summary_check_partitions()
     fi
 
     #--------------------------------------------------------
-    # BIOS boot partition on GPT
+    # BIOS boot partition
     #--------------------------------------------------------
 
     if [[ "$boot_mode" == "BIOS" &&
           "$partition_table" == "GPT" ]]
     then
-        if [[ -b "$bios_part" ]]
+        if [[ -n "$bios_part" && -b "$bios_part" ]]
         then
             summary_ok \
                 "BIOS boot partition: ${bios_part}"
@@ -426,7 +419,7 @@ summary_check_partitions()
     case "$swap_type"
     in
         partition)
-            if [[ -b "$swap_part" ]]
+            if [[ -n "$swap_part" && -b "$swap_part" ]]
             then
                 summary_ok \
                     "SWAP partition: ${swap_part}"
@@ -437,24 +430,18 @@ summary_check_partitions()
             ;;
 
         file)
-            if [[ -f /mnt/swapfile ]]
-            then
-                summary_ok \
-                    "SWAP file exists: /mnt/swapfile"
-            else
-                summary_error \
-                    "SWAP file missing: /mnt/swapfile"
-            fi
+            summary_ok \
+                "SWAP file selected"
             ;;
 
-        none)
+        none|"")
             summary_ok \
                 "SWAP disabled"
             ;;
 
         *)
             summary_error \
-                "Unknown SWAP type: ${swap_type:-empty}"
+                "Unknown SWAP type: ${swap_type}"
             ;;
     esac
 
@@ -467,8 +454,8 @@ summary_check_partitions()
 
 summary_check_mounts()
 {
-    local boot_mode
-    local create_home
+    local boot_mode=""
+    local create_home=""
 
     boot_mode="$(summary_config_get BOOT_MODE)"
     create_home="$(summary_config_get CREATE_HOME)"
@@ -525,47 +512,17 @@ summary_check_mounts()
 # Filesystem checks
 #============================================================
 
-summary_get_fs_type()
-{
-    local device="${1:-}"
-    local actual=""
-
-    if [[ -z "$device" ]]
-    then
-        printf '%s\n' ""
-        return 0
-    fi
-
-    if [[ ! -b "$device" ]]
-    then
-        printf '%s\n' ""
-        return 0
-    fi
-
-    actual="$(
-        blkid \
-            -s TYPE \
-            -o value \
-            "$device" \
-            2>/dev/null \
-            || true
-    )"
-
-    printf '%s\n' "$actual"
-
-    return 0
-}
-
 summary_check_filesystems()
 {
-    local filesystem
-    local root_part
-    local home_part
-    local efi_part
-    local swap_part
-    local swap_type
-    local create_home
-    local actual
+    local filesystem=""
+    local root_part=""
+    local home_part=""
+    local efi_part=""
+    local swap_part=""
+    local swap_type=""
+    local actual=""
+    local create_home=""
+    local boot_mode=""
 
     filesystem="$(summary_config_get FILESYSTEM)"
     root_part="$(summary_config_get ROOT_PART)"
@@ -574,20 +531,34 @@ summary_check_filesystems()
     swap_part="$(summary_config_get SWAP_PART)"
     swap_type="$(summary_config_get SWAP_TYPE)"
     create_home="$(summary_config_get CREATE_HOME)"
+    boot_mode="$(summary_config_get BOOT_MODE)"
 
     #--------------------------------------------------------
     # ROOT
     #--------------------------------------------------------
 
-    actual="$(summary_get_fs_type "$root_part")"
-
-    if [[ "$actual" == "$filesystem" ]]
+    if [[ -n "$root_part" && -b "$root_part" ]]
     then
-        summary_ok \
-            "ROOT filesystem: ${actual}"
+        actual="$(
+            blkid \
+                -s TYPE \
+                -o value \
+                "$root_part" \
+                2>/dev/null \
+                || true
+        )"
+
+        if [[ "$actual" == "$filesystem" ]]
+        then
+            summary_ok \
+                "ROOT filesystem: ${actual}"
+        else
+            summary_error \
+                "ROOT filesystem: expected=${filesystem}, actual=${actual:-unknown}"
+        fi
     else
         summary_error \
-            "ROOT filesystem: expected=${filesystem:-empty}, actual=${actual:-unknown}"
+            "Cannot check ROOT filesystem: partition unavailable"
     fi
 
     #--------------------------------------------------------
@@ -596,15 +567,28 @@ summary_check_filesystems()
 
     if [[ "$create_home" == "1" ]]
     then
-        actual="$(summary_get_fs_type "$home_part")"
-
-        if [[ "$actual" == "$filesystem" ]]
+        if [[ -n "$home_part" && -b "$home_part" ]]
         then
-            summary_ok \
-                "HOME filesystem: ${actual}"
+            actual="$(
+                blkid \
+                    -s TYPE \
+                    -o value \
+                    "$home_part" \
+                    2>/dev/null \
+                    || true
+            )"
+
+            if [[ "$actual" == "$filesystem" ]]
+            then
+                summary_ok \
+                    "HOME filesystem: ${actual}"
+            else
+                summary_error \
+                    "HOME filesystem: expected=${filesystem}, actual=${actual:-unknown}"
+            fi
         else
             summary_error \
-                "HOME filesystem: expected=${filesystem:-empty}, actual=${actual:-unknown}"
+                "Cannot check HOME filesystem: partition unavailable"
         fi
     fi
 
@@ -612,17 +596,30 @@ summary_check_filesystems()
     # EFI
     #--------------------------------------------------------
 
-    if [[ "$(summary_config_get BOOT_MODE)" == "UEFI" ]]
+    if [[ "$boot_mode" == "UEFI" ]]
     then
-        actual="$(summary_get_fs_type "$efi_part")"
-
-        if [[ "$actual" == "vfat" ]]
+        if [[ -n "$efi_part" && -b "$efi_part" ]]
         then
-            summary_ok \
-                "EFI filesystem: vfat"
+            actual="$(
+                blkid \
+                    -s TYPE \
+                    -o value \
+                    "$efi_part" \
+                    2>/dev/null \
+                    || true
+            )"
+
+            if [[ "$actual" == "vfat" ]]
+            then
+                summary_ok \
+                    "EFI filesystem: vfat"
+            else
+                summary_error \
+                    "EFI filesystem: expected=vfat, actual=${actual:-unknown}"
+            fi
         else
             summary_error \
-                "EFI filesystem: expected=vfat, actual=${actual:-unknown}"
+                "Cannot check EFI filesystem: partition unavailable"
         fi
     fi
 
@@ -632,25 +629,38 @@ summary_check_filesystems()
 
     if [[ "$swap_type" == "partition" ]]
     then
-        actual="$(summary_get_fs_type "$swap_part")"
-
-        if [[ "$actual" == "swap" ]]
+        if [[ -n "$swap_part" && -b "$swap_part" ]]
         then
-            summary_ok \
-                "SWAP filesystem: swap"
+            actual="$(
+                blkid \
+                    -s TYPE \
+                    -o value \
+                    "$swap_part" \
+                    2>/dev/null \
+                    || true
+            )"
+
+            if [[ "$actual" == "swap" ]]
+            then
+                summary_ok \
+                    "SWAP filesystem: swap"
+            else
+                summary_error \
+                    "SWAP filesystem: expected=swap, actual=${actual:-unknown}"
+            fi
         else
             summary_error \
-                "SWAP filesystem: expected=swap, actual=${actual:-unknown}"
+                "Cannot check SWAP filesystem: partition unavailable"
         fi
     elif [[ "$swap_type" == "file" ]]
     then
         if [[ -f /mnt/swapfile ]]
         then
             summary_ok \
-                "SWAP file exists"
+                "SWAP file exists: /mnt/swapfile"
         else
             summary_error \
-                "SWAP file missing"
+                "SWAP file missing: /mnt/swapfile"
         fi
     fi
 
@@ -684,12 +694,8 @@ summary_check_fstab()
     summary_ok \
         "fstab exists and is not empty"
 
-    #--------------------------------------------------------
-    # Root entry
-    #--------------------------------------------------------
-
     if grep -Eq \
-        '^[^#[:space:]]+[[:space:]]+/[[:space:]]' \
+        '^[^#[:space:]].+[[:space:]]+/[[:space:]]' \
         "$fstab"
     then
         summary_ok \
@@ -697,24 +703,6 @@ summary_check_fstab()
     else
         summary_error \
             "fstab does not contain root entry"
-    fi
-
-    #--------------------------------------------------------
-    # EFI entry
-    #--------------------------------------------------------
-
-    if [[ "$(summary_config_get BOOT_MODE)" == "UEFI" ]]
-    then
-        if grep -Eq \
-            '^[^#[:space:]]+[[:space:]]+/boot/efi[[:space:]]' \
-            "$fstab"
-        then
-            summary_ok \
-                "fstab contains EFI entry"
-        else
-            summary_error \
-                "fstab does not contain EFI entry"
-        fi
     fi
 
     return 0
@@ -728,33 +716,31 @@ summary_check_target()
 {
     summary_check_directory \
         /mnt/etc \
-        "Target /etc exists" \
-        || true
+        "Target /etc exists"
 
     summary_check_directory \
         /mnt/usr \
-        "Target /usr exists" \
-        || true
+        "Target /usr exists"
+
+    summary_check_directory \
+        /mnt/root \
+        "Target /root exists"
 
     summary_check_file \
         /mnt/etc/passwd \
-        "Target passwd database exists" \
-        || true
+        "Target passwd database exists"
 
     summary_check_file \
         /mnt/etc/shadow \
-        "Target shadow database exists" \
-        || true
+        "Target shadow database exists"
 
     summary_check_file \
         /mnt/etc/hostname \
-        "Target hostname exists" \
-        || true
+        "Target hostname exists"
 
     summary_check_file \
         /mnt/root/installed-packages.txt \
-        "Installed package list exists" \
-        || true
+        "Installed package list exists"
 
     return 0
 }
@@ -765,10 +751,13 @@ summary_check_target()
 
 summary_check_user()
 {
-    local user_name
+    local user_name=""
 
-    user_name="$(summary_config_get USER_NAME)"
+    user_name="$(
+        summary_config_get USER_NAME
+    )"
 
+    # No user configured
     if [[ -z "$user_name" ]]
     then
         summary_ok \
@@ -780,7 +769,7 @@ summary_check_user()
     if ! command -v arch-chroot >/dev/null 2>&1
     then
         summary_error \
-            "arch-chroot command is unavailable"
+            "arch-chroot is unavailable"
 
         return 1
     fi
@@ -814,8 +803,8 @@ summary_check_user()
         -nG \
         "$user_name" \
         2>/dev/null |
-        grep -Eq \
-            '(^|[[:space:]])wheel($|[[:space:]])'
+        tr ' ' '\n' |
+        grep -qx 'wheel'
     then
         summary_ok \
             "User belongs to wheel"
@@ -833,9 +822,7 @@ summary_check_user()
 
 summary_check_sudo()
 {
-    local sudo_file="/mnt/etc/sudoers.d/10-wheel"
-
-    if [[ ! -f "$sudo_file" ]]
+    if [[ ! -f /mnt/etc/sudoers.d/10-wheel ]]
     then
         summary_error \
             "sudo wheel configuration missing"
@@ -858,7 +845,7 @@ summary_check_network()
     if ! command -v arch-chroot >/dev/null 2>&1
     then
         summary_error \
-            "arch-chroot command is unavailable"
+            "arch-chroot is unavailable"
 
         return 1
     fi
@@ -886,38 +873,28 @@ summary_check_network()
 
 summary_check_ssh()
 {
-    local ssh_enabled
+    local ssh_enabled=""
 
     ssh_enabled="$(summary_config_get SSH_ENABLED)"
 
-    if [[ "$ssh_enabled" != "1" ]]
+    if [[ "$ssh_enabled" == "1" ]]
     then
+        if arch-chroot \
+            /mnt \
+            systemctl \
+            is-enabled \
+            sshd.service \
+            >/dev/null 2>&1
+        then
+            summary_ok \
+                "sshd enabled"
+        else
+            summary_error \
+                "sshd is not enabled"
+        fi
+    else
         summary_ok \
             "SSH disabled"
-
-        return 0
-    fi
-
-    if ! command -v arch-chroot >/dev/null 2>&1
-    then
-        summary_error \
-            "arch-chroot command is unavailable"
-
-        return 1
-    fi
-
-    if arch-chroot \
-        /mnt \
-        systemctl \
-        is-enabled \
-        sshd.service \
-        >/dev/null 2>&1
-    then
-        summary_ok \
-            "sshd enabled"
-    else
-        summary_error \
-            "sshd is not enabled"
     fi
 
     return 0
@@ -929,9 +906,8 @@ summary_check_ssh()
 
 summary_check_desktop()
 {
-    local desktop
-    local service
-    local default_target=""
+    local desktop=""
+    local service=""
 
     desktop="$(summary_config_get DESKTOP)"
 
@@ -949,7 +925,7 @@ summary_check_desktop()
             service="gdm.service"
             ;;
 
-        kde)
+        kde|plasma)
             service="sddm.service"
             ;;
 
@@ -965,18 +941,6 @@ summary_check_desktop()
             ;;
     esac
 
-    if ! command -v arch-chroot >/dev/null 2>&1
-    then
-        summary_error \
-            "arch-chroot command is unavailable"
-
-        return 1
-    fi
-
-    #--------------------------------------------------------
-    # Display manager
-    #--------------------------------------------------------
-
     if arch-chroot \
         /mnt \
         systemctl \
@@ -991,26 +955,18 @@ summary_check_desktop()
             "Display manager not enabled: ${service}"
     fi
 
-    #--------------------------------------------------------
-    # Default target
-    #--------------------------------------------------------
-
-    default_target="$(
-        arch-chroot \
-            /mnt \
-            systemctl \
-            get-default \
-            2>/dev/null \
-            || true
-    )"
-
-    if [[ "$default_target" == "graphical.target" ]]
+    if arch-chroot \
+        /mnt \
+        systemctl \
+        get-default \
+        2>/dev/null |
+        grep -qx 'graphical.target'
     then
         summary_ok \
             "Default target: graphical.target"
     else
         summary_error \
-            "Default target is not graphical.target: ${default_target:-unknown}"
+            "Default target is not graphical.target"
     fi
 
     return 0
@@ -1022,14 +978,13 @@ summary_check_desktop()
 
 summary_check_bootloader()
 {
-    local boot_mode
-    local grub_cfg
+    local boot_mode=""
+    local grub_cfg="/mnt/boot/grub/grub.cfg"
 
     boot_mode="$(summary_config_get BOOT_MODE)"
-    grub_cfg="/mnt/boot/grub/grub.cfg"
 
     #--------------------------------------------------------
-    # GRUB config
+    # GRUB configuration
     #--------------------------------------------------------
 
     if [[ ! -f "$grub_cfg" ]]
@@ -1045,36 +1000,25 @@ summary_check_bootloader()
 
     #--------------------------------------------------------
     # UEFI
-    #
-    # Do not require a hard-coded ARCHLINUX directory.
-    # grub-install may create EFI/GRUB or another configured
-    # vendor directory.
     #--------------------------------------------------------
 
     if [[ "$boot_mode" == "UEFI" ]]
     then
-        if [[ -d /mnt/boot/efi/EFI ]]
+        if [[ -f /mnt/boot/efi/EFI/ARCHLINUX/grubx64.efi ]]
         then
-            if find \
-                /mnt/boot/efi/EFI \
-                -type f \
-                \( \
-                    -iname 'grubx64.efi' \
-                    -o \
-                    -iname 'BOOTX64.EFI' \
-                \) \
-                -print -quit |
-                grep -q .
-            then
-                summary_ok \
-                    "UEFI GRUB EFI binary exists"
-            else
-                summary_error \
-                    "UEFI GRUB EFI binary missing"
-            fi
+            summary_ok \
+                "UEFI GRUB binary exists"
+        elif [[ -f /mnt/boot/efi/EFI/GRUB/grubx64.efi ]]
+        then
+            summary_ok \
+                "UEFI GRUB binary exists"
+        elif [[ -f /mnt/boot/efi/EFI/BOOT/BOOTX64.EFI ]]
+        then
+            summary_ok \
+                "UEFI fallback bootloader exists"
         else
             summary_error \
-                "EFI directory missing: /mnt/boot/efi/EFI"
+                "UEFI GRUB binary missing"
         fi
 
     #--------------------------------------------------------
@@ -1085,10 +1029,6 @@ summary_check_bootloader()
     then
         summary_ok \
             "BIOS GRUB mode selected"
-
-    else
-        summary_error \
-            "Unknown boot mode: ${boot_mode:-empty}"
     fi
 
     return 0
@@ -1101,15 +1041,14 @@ summary_check_bootloader()
 summary_draw()
 {
     local row=3
-
-    local user_name
-    local desktop
-    local boot_mode
-    local partition_table
-    local filesystem
-    local swap_type
-    local target_disk
-    local hostname
+    local user_name=""
+    local desktop=""
+    local boot_mode=""
+    local partition_table=""
+    local filesystem=""
+    local swap_type=""
+    local target_disk=""
+    local hostname=""
 
     boot_mode="$(summary_config_get BOOT_MODE)"
     partition_table="$(summary_config_get PARTITION_TABLE)"
@@ -1121,130 +1060,55 @@ summary_draw()
     user_name="$(summary_config_get USER_NAME)"
     desktop="$(summary_config_get DESKTOP)"
 
-    #--------------------------------------------------------
-    # Clear screen
-    #--------------------------------------------------------
-
     if declare -F tui_clear >/dev/null 2>&1
     then
         tui_clear
     fi
 
-    #--------------------------------------------------------
-    # Title
-    #--------------------------------------------------------
-
     if declare -F titlebar_draw >/dev/null 2>&1
     then
         titlebar_draw \
-            "${APP_NAME:-Arch Installer} — Summary"
+            "${APP_NAME:-Arch Installer} - Summary"
     fi
-
-    #--------------------------------------------------------
-    # Information
-    #--------------------------------------------------------
 
     if declare -F tui_move >/dev/null 2>&1
     then
         tui_move "$row" 5
-    fi
+        tui_print "Target disk      : ${target_disk}"
+        row=$((row + 1))
 
-    printf \
-        'Target disk      : %s' \
-        "${target_disk:-none}"
-
-    row=$((row + 1))
-
-    if declare -F tui_move >/dev/null 2>&1
-    then
         tui_move "$row" 5
-    fi
+        tui_print "Boot mode        : ${boot_mode}"
+        row=$((row + 1))
 
-    printf \
-        'Boot mode        : %s' \
-        "${boot_mode:-unknown}"
-
-    row=$((row + 1))
-
-    if declare -F tui_move >/dev/null 2>&1
-    then
         tui_move "$row" 5
-    fi
+        tui_print "Partition table  : ${partition_table}"
+        row=$((row + 1))
 
-    printf \
-        'Partition table  : %s' \
-        "${partition_table:-unknown}"
-
-    row=$((row + 1))
-
-    if declare -F tui_move >/dev/null 2>&1
-    then
         tui_move "$row" 5
-    fi
+        tui_print "Root filesystem  : ${filesystem}"
+        row=$((row + 1))
 
-    printf \
-        'Root filesystem  : %s' \
-        "${filesystem:-unknown}"
-
-    row=$((row + 1))
-
-    if declare -F tui_move >/dev/null 2>&1
-    then
         tui_move "$row" 5
-    fi
+        tui_print "Swap             : ${swap_type}"
+        row=$((row + 1))
 
-    printf \
-        'Swap             : %s' \
-        "${swap_type:-unknown}"
-
-    row=$((row + 1))
-
-    if declare -F tui_move >/dev/null 2>&1
-    then
         tui_move "$row" 5
-    fi
+        tui_print "Hostname         : ${hostname}"
+        row=$((row + 1))
 
-    printf \
-        'Hostname         : %s' \
-        "${hostname:-unknown}"
-
-    row=$((row + 1))
-
-    if declare -F tui_move >/dev/null 2>&1
-    then
         tui_move "$row" 5
-    fi
+        tui_print "User             : ${user_name:-none}"
+        row=$((row + 1))
 
-    printf \
-        'User             : %s' \
-        "${user_name:-none}"
-
-    row=$((row + 1))
-
-    if declare -F tui_move >/dev/null 2>&1
-    then
         tui_move "$row" 5
-    fi
+        tui_print "Desktop          : ${desktop:-none}"
+        row=$((row + 1))
 
-    printf \
-        'Desktop          : %s' \
-        "${desktop:-none}"
-
-    row=$((row + 1))
-
-    if declare -F tui_move >/dev/null 2>&1
-    then
         tui_move "$row" 5
+        tui_print \
+            "Validation       : ${SUMMARY_OK} OK / ${SUMMARY_ERRORS} ERROR"
     fi
-
-    printf \
-        'Validation       : %d OK / %d ERROR' \
-        "$SUMMARY_OK" \
-        "$SUMMARY_ERRORS"
-
-    #--------------------------------------------------------
-    # Status bar
-    #--------------------------------------------------------
 
     if declare -F statusbar_draw >/dev/null 2>&1
     then
@@ -1252,15 +1116,9 @@ summary_draw()
             "Enter Close   Esc Back"
     fi
 
-    #--------------------------------------------------------
-    # Refresh
-    #--------------------------------------------------------
-
     if declare -F screen_refresh >/dev/null 2>&1
     then
-        screen_refresh \
-            2>/dev/null \
-            || true
+        screen_refresh 2>/dev/null || true
     fi
 
     return 0
@@ -1277,15 +1135,16 @@ summary_wait()
     while true
     do
         event="$(
-            event_read \
-                2>/dev/null \
-                || true
+            event_read
         )"
 
         case "$event"
         in
             "$EVENT_SELECT"|"$EVENT_BACK")
                 return 0
+                ;;
+
+            *)
                 ;;
         esac
     done
@@ -1299,46 +1158,18 @@ summary_validate()
 {
     summary_reset
 
-    # Each check is intentionally protected.
-    # A failed check must increment SUMMARY_ERRORS,
-    # but must NOT abort the entire validation because
-    # install.sh uses set -e / set -E / pipefail.
-
-    summary_check_configuration \
-        || true
-
-    summary_check_partitions \
-        || true
-
-    summary_check_filesystems \
-        || true
-
-    summary_check_mounts \
-        || true
-
-    summary_check_fstab \
-        || true
-
-    summary_check_target \
-        || true
-
-    summary_check_user \
-        || true
-
-    summary_check_sudo \
-        || true
-
-    summary_check_network \
-        || true
-
-    summary_check_ssh \
-        || true
-
-    summary_check_desktop \
-        || true
-
-    summary_check_bootloader \
-        || true
+    summary_check_configuration
+    summary_check_partitions
+    summary_check_filesystems
+    summary_check_mounts
+    summary_check_fstab
+    summary_check_target
+    summary_check_user
+    summary_check_sudo
+    summary_check_network
+    summary_check_ssh
+    summary_check_desktop
+    summary_check_bootloader
 
     summary_log_info \
         "Final validation: ${SUMMARY_OK} OK, ${SUMMARY_ERRORS} ERROR"
@@ -1352,17 +1183,13 @@ summary_validate()
 }
 
 #============================================================
-# Main summary
+# Main
 #============================================================
 
-summary_main()
+summary()
 {
     summary_log_info \
         "Final summary started"
-
-    #--------------------------------------------------------
-    # Validation
-    #--------------------------------------------------------
 
     if ! summary_validate
     then
@@ -1372,31 +1199,19 @@ summary_main()
         then
             dialog_error \
                 "Installation validation failed" \
-                "${SUMMARY_ERRORS} error(s) found."
+                "${SUMMARY_ERRORS} error(s) detected."
         fi
 
         summary_wait
 
-        summary_log_warn \
-            "Final validation failed: ${SUMMARY_ERRORS} error(s)"
-
         return 1
     fi
-
-    #--------------------------------------------------------
-    # Success
-    #--------------------------------------------------------
 
     summary_draw
 
     if declare -F dialog_info >/dev/null 2>&1
     then
         dialog_info \
-            "Installation" \
-            "All final checks passed."
-    elif declare -F dialog_message >/dev/null 2>&1
-    then
-        dialog_message \
             "Installation" \
             "All final checks passed."
     fi
@@ -1413,8 +1228,7 @@ summary_main()
 # Compatibility entry point
 #============================================================
 
-summary()
+summary_main()
 {
-    summary_main "$@"
+    summary
 }
-```

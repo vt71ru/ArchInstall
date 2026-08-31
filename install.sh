@@ -19,8 +19,6 @@
 #   • запуск main menu
 #   • корректное завершение
 #
-# Не выполняет установку напрямую.
-#
 #============================================================
 
 set -Eeuo pipefail
@@ -54,7 +52,6 @@ LOGGER_READY=0
 TUI_READY=0
 INSTALLER_EXITING=0
 
-# File descriptor used for the real controlling terminal.
 TUI_TTY_FD=""
 
 #============================================================
@@ -173,7 +170,9 @@ close_terminal_fd()
     if [[ -n "${TUI_TTY_FD:-}" ]]
     then
         eval "exec ${TUI_TTY_FD}>&-" 2>/dev/null || true
+
         TUI_TTY_FD=""
+
         export TUI_TTY_FD
     fi
 
@@ -226,6 +225,9 @@ load_module()
 
         return 1
     fi
+
+    bootstrap_output \
+        "Loading ${kind}: ${name}"
 
     logger_debug \
         "Loading ${kind} module: ${name}"
@@ -361,10 +363,8 @@ check_terminal()
         return 1
     fi
 
-    # Open the real controlling terminal.
     open_terminal_fd || return 1
 
-    # Verify that the terminal supports ioctl operations.
     if ! stty -g <&"$TUI_TTY_FD" >/dev/null 2>&1
     then
         die \
@@ -436,7 +436,7 @@ load_core_libraries()
 }
 
 #============================================================
-# Validate required CONFIG API
+# Validate CONFIG API
 #============================================================
 
 check_config_api()
@@ -646,10 +646,6 @@ app_init()
     logger_info \
         "Initializing application"
 
-    #--------------------------------------------------------
-    # TUI owns low-level terminal state.
-    #--------------------------------------------------------
-
     if ! tui_init
     then
         logger_error \
@@ -845,8 +841,11 @@ main()
         "Project root: ${ROOT_DIR}"
 
     #--------------------------------------------------------
-    # Logger
+    # STEP 1
     #--------------------------------------------------------
+
+    bootstrap_output \
+        "STEP 1: logger"
 
     if ! logger_init
     then
@@ -866,34 +865,74 @@ main()
         "Project root: ${ROOT_DIR}"
 
     #--------------------------------------------------------
-    # Environment
+    # STEP 2
     #--------------------------------------------------------
+
+    bootstrap_output \
+        "STEP 2: check_root"
 
     check_root || return 1
 
+    #--------------------------------------------------------
+    # STEP 3
+    #--------------------------------------------------------
+
+    bootstrap_output \
+        "STEP 3: check_arch_environment"
+
     check_arch_environment || return 1
+
+    #--------------------------------------------------------
+    # STEP 4
+    #--------------------------------------------------------
+
+    bootstrap_output \
+        "STEP 4: check_project_structure"
 
     check_project_structure || return 1
 
+    #--------------------------------------------------------
+    # STEP 5
+    #--------------------------------------------------------
+
+    bootstrap_output \
+        "STEP 5: check_terminal"
+
     check_terminal || return 1
+
+    #--------------------------------------------------------
+    # STEP 6
+    #--------------------------------------------------------
+
+    bootstrap_output \
+        "STEP 6: check_dependencies"
 
     check_dependencies || return 1
 
     #--------------------------------------------------------
-    # Core libraries
+    # STEP 7
     #--------------------------------------------------------
+
+    bootstrap_output \
+        "STEP 7: load_core_libraries"
 
     load_core_libraries || return 1
 
     #--------------------------------------------------------
-    # Configuration API
+    # STEP 8
     #--------------------------------------------------------
+
+    bootstrap_output \
+        "STEP 8: check_config_api"
 
     check_config_api || return 1
 
     #--------------------------------------------------------
-    # Configuration
+    # STEP 9
     #--------------------------------------------------------
+
+    bootstrap_output \
+        "STEP 9: config_init_load"
 
     if ! config_init_load
     then
@@ -904,43 +943,56 @@ main()
     fi
 
     #--------------------------------------------------------
-    # Platform defaults
+    # STEP 10
     #--------------------------------------------------------
 
+    bootstrap_output \
+        "STEP 10: detect_boot_mode"
+
     detect_boot_mode || return 1
+
+    #--------------------------------------------------------
+    # STEP 11
+    #--------------------------------------------------------
+
+    bootstrap_output \
+        "STEP 11: detect_partition_table"
 
     detect_partition_table || return 1
 
     #--------------------------------------------------------
-    # Configuration bootstrap
-    #
-    # TARGET_DISK may legitimately be empty here.
-    # Full validation is performed by installer stages.
+    # STEP 12
     #--------------------------------------------------------
 
-    logger_debug \
-        "Configuration bootstrap completed"
-
-    #--------------------------------------------------------
-    # Installer modules
-    #--------------------------------------------------------
+    bootstrap_output \
+        "STEP 12: load_installer_modules"
 
     load_installer_modules || return 1
 
     #--------------------------------------------------------
-    # TUI
+    # STEP 13
     #--------------------------------------------------------
 
+    bootstrap_output \
+        "STEP 13: app_init"
+
     app_init || return 1
+
+    #--------------------------------------------------------
+    # STEP 14
+    #--------------------------------------------------------
+
+    bootstrap_output \
+        "STEP 14: draw_startup"
 
     draw_startup || return 1
 
     #--------------------------------------------------------
-    # Main menu
+    # STEP 15
     #--------------------------------------------------------
 
-    logger_info \
-        "Entering main menu"
+    bootstrap_output \
+        "STEP 15: menu_main"
 
     if ! menu_main
     then
@@ -949,6 +1001,13 @@ main()
 
         return 1
     fi
+
+    #--------------------------------------------------------
+    # STEP 16
+    #--------------------------------------------------------
+
+    bootstrap_output \
+        "STEP 16: normal exit"
 
     logger_info \
         "Main menu exited normally"

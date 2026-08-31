@@ -7,36 +7,6 @@
 #
 #  Главное меню Arch Installer.
 #
-#  Ответственность:
-#   • отображение главного меню
-#   • навигация через TUI API
-#   • вызов installer controller
-#   • отображение результата
-#   • системная информация
-#   • shell
-#   • завершение installer
-#
-#  НЕ содержит:
-#   • TTY logic
-#   • stty
-#   • keyboard parsing
-#   • ANSI implementation
-#   • partition logic
-#   • filesystem logic
-#   • mount logic
-#   • package logic
-#   • bootloader logic
-#
-#  Архитектура:
-#
-#       menu_main
-#           ↓
-#       installer.sh
-#           ↓
-#       installer_*()
-#           ↓
-#       *_main()
-#
 #============================================================
 
 if [[ -n "${MENU_MAIN_SH_LOADED:-}" ]]
@@ -176,14 +146,14 @@ menu_main_install()
     # Controller check
     #--------------------------------------------------------
 
-    if ! declare -F installer_run >/dev/null 2>&1
+    if ! declare -F installer_full_install >/dev/null 2>&1
     then
         menu_main_log_error \
-            "installer_run() is not available"
+            "installer_full_install() is not available"
 
         menu_main_operation_failed \
             "Installation" \
-            "installer_run() is not available."
+            "installer_full_install() is not available."
 
         return 1
     fi
@@ -225,13 +195,13 @@ menu_main_install()
     fi
 
     menu_main_log_info \
-        "Calling installer_run()"
+        "Calling installer_full_install()"
 
     #--------------------------------------------------------
     # Run controller
     #--------------------------------------------------------
 
-    if installer_run
+    if installer_full_install
     then
         rc=0
     else
@@ -312,10 +282,6 @@ menu_main_install()
 
     menu_main_log_error \
         "Message: ${last_message}"
-
-    #--------------------------------------------------------
-    # Show failure
-    #--------------------------------------------------------
 
     if declare -F dialog_error >/dev/null 2>&1
     then
@@ -582,40 +548,20 @@ menu_main_system_info()
             || return 1
     fi
 
-    tui_move \
-        6 \
-        8 || return 1
+    tui_move 6 8 || return 1
+    tui_print "Kernel:  ${kernel}"
 
-    tui_print \
-        "Kernel:  ${kernel}"
+    tui_move 7 8 || return 1
+    tui_print "Arch:    ${arch}"
 
-    tui_move \
-        7 \
-        8 || return 1
+    tui_move 8 8 || return 1
+    tui_print "Memory:  ${memory}"
 
-    tui_print \
-        "Arch:    ${arch}"
+    tui_move 9 8 || return 1
+    tui_print "CPU:     ${cpu:-unknown}"
 
-    tui_move \
-        8 \
-        8 || return 1
-
-    tui_print \
-        "Memory:  ${memory}"
-
-    tui_move \
-        9 \
-        8 || return 1
-
-    tui_print \
-        "CPU:     ${cpu:-unknown}"
-
-    tui_move \
-        11 \
-        8 || return 1
-
-    tui_print \
-        "Press Enter or Esc to return."
+    tui_move 11 8 || return 1
+    tui_print "Press Enter or Esc to return."
 
     if declare -F statusbar_draw >/dev/null 2>&1
     then
@@ -758,9 +704,7 @@ menu_main_draw()
             break
         fi
 
-        tui_move \
-            "$row" \
-            8 || return 1
+        tui_move "$row" 8 || return 1
 
         if (( i == selected ))
         then
@@ -829,10 +773,6 @@ menu_main()
 
         case "${TUI_EVENT:-}" in
 
-            #------------------------------------------------
-            # Up
-            #------------------------------------------------
-
             "$EVENT_UP")
                 if (( selected > 0 ))
                 then
@@ -841,10 +781,6 @@ menu_main()
                     selected=$((item_count - 1))
                 fi
                 ;;
-
-            #------------------------------------------------
-            # Down
-            #------------------------------------------------
 
             "$EVENT_DOWN")
                 if (( selected < item_count - 1 ))
@@ -855,129 +791,65 @@ menu_main()
                 fi
                 ;;
 
-            #------------------------------------------------
-            # Home
-            #------------------------------------------------
-
             "$EVENT_HOME")
                 selected=0
                 ;;
-
-            #------------------------------------------------
-            # End
-            #------------------------------------------------
 
             "$EVENT_END")
                 selected=$((item_count - 1))
                 ;;
 
-            #------------------------------------------------
-            # Select
-            #------------------------------------------------
-
             "$EVENT_SELECT")
 
                 case "$selected" in
 
-                    #----------------------------------------
-                    # Full installation
-                    #----------------------------------------
-
                     0)
-                        if ! menu_main_install
-                        then
+                        menu_main_install || \
                             menu_main_log_warn \
                                 "Full installation returned failure"
-                        fi
                         ;;
-
-                    #----------------------------------------
-                    # Partition
-                    #----------------------------------------
 
                     1)
-                        if ! menu_main_partition
-                        then
+                        menu_main_partition || \
                             menu_main_log_warn \
                                 "Partition operation failed"
-                        fi
                         ;;
-
-                    #----------------------------------------
-                    # Filesystem
-                    #----------------------------------------
 
                     2)
-                        if ! menu_main_filesystem
-                        then
+                        menu_main_filesystem || \
                             menu_main_log_warn \
                                 "Filesystem operation failed"
-                        fi
                         ;;
-
-                    #----------------------------------------
-                    # Mount
-                    #----------------------------------------
 
                     3)
-                        if ! menu_main_mount
-                        then
+                        menu_main_mount || \
                             menu_main_log_warn \
                                 "Mount operation failed"
-                        fi
                         ;;
-
-                    #----------------------------------------
-                    # Packages
-                    #----------------------------------------
 
                     4)
-                        if ! menu_main_packages
-                        then
+                        menu_main_packages || \
                             menu_main_log_warn \
                                 "Package operation failed"
-                        fi
                         ;;
-
-                    #----------------------------------------
-                    # Bootloader
-                    #----------------------------------------
 
                     5)
-                        if ! menu_main_bootloader
-                        then
+                        menu_main_bootloader || \
                             menu_main_log_warn \
                                 "Bootloader operation failed"
-                        fi
                         ;;
-
-                    #----------------------------------------
-                    # System information
-                    #----------------------------------------
 
                     6)
-                        if ! menu_main_system_info
-                        then
+                        menu_main_system_info || \
                             menu_main_log_warn \
                                 "System information failed"
-                        fi
                         ;;
-
-                    #----------------------------------------
-                    # Shell
-                    #----------------------------------------
 
                     7)
-                        if ! menu_main_shell
-                        then
+                        menu_main_shell || \
                             menu_main_log_warn \
                                 "Installer shell failed"
-                        fi
                         ;;
-
-                    #----------------------------------------
-                    # Exit
-                    #----------------------------------------
 
                     8)
                         if menu_main_exit
@@ -988,10 +860,6 @@ menu_main()
 
                 esac
                 ;;
-
-            #------------------------------------------------
-            # Escape
-            #------------------------------------------------
 
             "$EVENT_BACK")
                 if menu_main_exit

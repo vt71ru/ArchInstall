@@ -54,6 +54,9 @@ LOGGER_READY=0
 TUI_READY=0
 INSTALLER_EXITING=0
 
+# File descriptor used for the real controlling terminal.
+TUI_TTY_FD=""
+
 #============================================================
 # Logger
 #============================================================
@@ -123,6 +126,61 @@ bootstrap_output()
 }
 
 #============================================================
+# Terminal
+#============================================================
+
+open_terminal_fd()
+{
+    if [[ -n "${TUI_TTY_FD:-}" ]]
+    then
+        return 0
+    fi
+
+    if [[ ! -e /dev/tty ]]
+    then
+        die \
+            "/dev/tty is unavailable"
+
+        return 1
+    fi
+
+    if [[ ! -r /dev/tty || ! -w /dev/tty ]]
+    then
+        die \
+            "/dev/tty is not readable/writable"
+
+        return 1
+    fi
+
+    if ! exec {TUI_TTY_FD}<>/dev/tty
+    then
+        die \
+            "Cannot open controlling terminal"
+
+        return 1
+    fi
+
+    export TUI_TTY_FD
+
+    logger_debug \
+        "Controlling terminal opened on FD ${TUI_TTY_FD}"
+
+    return 0
+}
+
+close_terminal_fd()
+{
+    if [[ -n "${TUI_TTY_FD:-}" ]]
+    then
+        eval "exec ${TUI_TTY_FD}>&-" 2>/dev/null || true
+        TUI_TTY_FD=""
+        export TUI_TTY_FD
+    fi
+
+    return 0
+}
+
+#============================================================
 # Module loader
 #============================================================
 
@@ -138,9 +196,11 @@ load_module()
         lib)
             directory="$LIB_DIR"
             ;;
+
         installer)
             directory="$INSTALLER_DIR"
             ;;
+
         *)
             die \
                 "Unknown module type: ${kind}"
@@ -264,8 +324,7 @@ check_terminal()
         return 1
     fi
 
-    if [[ ! -r /dev/tty ||
-          ! -w /dev/tty ]]
+    if [[ ! -r /dev/tty || ! -w /dev/tty ]]
     then
         die \
             "/dev/tty is not readable/writable"
@@ -301,6 +360,21 @@ check_terminal()
 
         return 1
     fi
+
+    # Open the real controlling terminal.
+    open_terminal_fd || return 1
+
+    # Verify that the terminal supports ioctl operations.
+    if ! stty -g <&"$TUI_TTY_FD" >/dev/null 2>&1
+    then
+        die \
+            "Controlling terminal does not support terminal ioctls"
+
+        return 1
+    fi
+
+    logger_info \
+        "Terminal check passed"
 
     return 0
 }
@@ -348,9 +422,6 @@ load_core_libraries()
 {
     require_lib \
         config.sh
-
-    require_lib \
-        logger.sh
 
     require_lib \
         common.sh
@@ -470,7 +541,8 @@ detect_partition_table()
     fi
 
     boot_mode="$(
-        config_get BOOT_MODE
+        config_get \
+            BOOT_MODE
     )"
 
     case "$boot_mode"
@@ -478,9 +550,11 @@ detect_partition_table()
         UEFI)
             table="GPT"
             ;;
+
         BIOS)
             table="MBR"
             ;;
+
         *)
             die \
                 "Cannot determine partition table without valid boot mode"
@@ -572,9 +646,10 @@ app_init()
     logger_info \
         "Initializing application"
 
-    #
-    # TUI owns the low-level terminal state.
-    #
+    #--------------------------------------------------------
+    # TUI owns low-level terminal state.
+    #--------------------------------------------------------
+
     if ! tui_init
     then
         logger_error \
@@ -595,10 +670,16 @@ app_init()
 
     TUI_READY=1
 
-    terminal_title \
-        "$APP_NAME"
+    if declare -F terminal_title >/dev/null 2>&1
+    then
+        terminal_title \
+            "$APP_NAME"
+    fi
 
-    tui_clear
+    if declare -F tui_clear >/dev/null 2>&1
+    then
+        tui_clear
+    fi
 
     logger_info \
         "Application initialized"
@@ -615,13 +696,15 @@ draw_startup()
     tui_clear || return 1
 
     titlebar_draw \
-        "$APP_NAME" || return 1
+        "$APP_NAME" \
+        || return 1
 
     statusbar_draw \
         "F1 Help   ↑↓ Navigate   Enter Select   Esc Exit" \
         || return 1
 
-    screen_refresh || return 1
+    screen_refresh \
+        || return 1
 
     return 0
 }
@@ -650,6 +733,8 @@ cleanup()
     then
         terminal_restore || true
     fi
+
+    close_terminal_fd
 
     if (( LOGGER_READY ))
     then
@@ -785,9 +870,13 @@ main()
     #--------------------------------------------------------
 
     check_root || return 1
+
     check_arch_environment || return 1
+
     check_project_structure || return 1
+
     check_terminal || return 1
+
     check_dependencies || return 1
 
     #--------------------------------------------------------
@@ -823,11 +912,10 @@ main()
     detect_partition_table || return 1
 
     #--------------------------------------------------------
-    # Configuration validation
+    # Configuration bootstrap
     #
-    # At this point an empty TARGET_DISK is normal.
-    # Therefore full installation validation is performed
-    # by the individual installer stages.
+    # TARGET_DISK may legitimately be empty here.
+    # Full validation is performed by installer stages.
     #--------------------------------------------------------
 
     logger_debug \
@@ -873,4 +961,3 @@ main()
 #============================================================
 
 main "$@"
-```

@@ -1019,8 +1019,9 @@ menu_main()
                         "ESC cancelled by user"
 
                     selected="$MENU_MAIN_SELECTED"
+                fi
 
-                    ;;
+                ;;
 
             #------------------------------------------------
             # UNKNOWN

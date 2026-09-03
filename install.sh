@@ -1,13 +1,14 @@
+```bash
 #!/usr/bin/env bash
 #
 #============================================================
-# Arch Installer
+#  Arch Installer
 #------------------------------------------------------------
-# install.sh
+#  install.sh
 #
-# Главный bootstrap/orchestrator проекта.
+#  Главный bootstrap/orchestrator проекта.
 #
-# Ответственность:
+#  Ответственность:
 #   • проверка окружения
 #   • загрузка logger
 #   • загрузка core libraries
@@ -20,7 +21,7 @@
 #   • запуск main menu
 #   • корректное завершение
 #
-# Не выполняет установку напрямую.
+#  Не выполняет установку напрямую.
 #
 #============================================================
 
@@ -54,7 +55,6 @@ readonly ASSET_DIR="${ROOT_DIR}/assets"
 LOGGER_READY=0
 TUI_READY=0
 INSTALLER_EXITING=0
-TUI_TTY_FD=""
 
 #============================================================
 # Bootstrap output
@@ -84,6 +84,7 @@ if [[ ! -f "$LOGGER_MODULE" ]]
 then
     bootstrap_output \
         "ERROR: Missing logger module: ${LOGGER_MODULE}"
+
     exit 1
 fi
 
@@ -95,6 +96,7 @@ if ! source "$LOGGER_MODULE"
 then
     bootstrap_output \
         "ERROR: Cannot load logger: ${LOGGER_MODULE}"
+
     exit 1
 fi
 
@@ -115,65 +117,6 @@ die()
         "ERROR: ${message}"
 
     return 1
-}
-
-#============================================================
-# Terminal
-#============================================================
-
-open_terminal_fd()
-{
-    if [[ -n "${TUI_TTY_FD:-}" ]]
-    then
-        return 0
-    fi
-
-    if [[ ! -e /dev/tty ]]
-    then
-        die "/dev/tty is unavailable"
-        return 1
-    fi
-
-    if [[ ! -r /dev/tty || ! -w /dev/tty ]]
-    then
-        die "/dev/tty is not readable/writable"
-        return 1
-    fi
-
-    if ! exec {TUI_TTY_FD}<>/dev/tty
-    then
-        die "Cannot open controlling terminal"
-        return 1
-    fi
-
-    export TUI_TTY_FD
-
-    if declare -F logger_debug >/dev/null 2>&1
-    then
-        logger_debug \
-            "Controlling terminal opened on FD ${TUI_TTY_FD}"
-    fi
-
-    return 0
-}
-
-close_terminal_fd()
-{
-    local fd="${TUI_TTY_FD:-}"
-
-    if [[ -n "$fd" ]]
-    then
-        if [[ "$fd" =~ ^[0-9]+$ ]]
-        then
-            eval "exec ${fd}>&-" 2>/dev/null || true
-        fi
-    fi
-
-    TUI_TTY_FD=""
-
-    export TUI_TTY_FD
-
-    return 0
 }
 
 #============================================================
@@ -199,14 +142,18 @@ load_module()
             ;;
 
         *)
-            die "Unknown module type: ${kind}"
+            die \
+                "Unknown module type: ${kind}"
+
             return 1
             ;;
     esac
 
     if [[ -z "$name" ]]
     then
-        die "Module name is empty"
+        die \
+            "Module name is empty"
+
         return 1
     fi
 
@@ -214,7 +161,9 @@ load_module()
 
     if [[ ! -f "$file" ]]
     then
-        die "Missing ${kind} module: ${file}"
+        die \
+            "Missing ${kind} module: ${file}"
+
         return 1
     fi
 
@@ -281,7 +230,9 @@ require_lib()
 {
     if [[ $# -ne 1 ]]
     then
-        die "require_lib(): module name is missing"
+        die \
+            "require_lib(): module name is missing"
+
         return 1
     fi
 
@@ -294,7 +245,9 @@ require_installer()
 {
     if [[ $# -ne 1 ]]
     then
-        die "require_installer(): module name is missing"
+        die \
+            "require_installer(): module name is missing"
+
         return 1
     fi
 
@@ -314,7 +267,9 @@ check_root()
 
     if (( EUID != 0 ))
     then
-        die "Installer must be run as root"
+        die \
+            "Installer must be run as root"
+
         return 1
     fi
 
@@ -331,7 +286,9 @@ check_arch_environment()
 
     if [[ ! -f /etc/arch-release ]]
     then
-        die "This installer must be run from Arch Linux"
+        die \
+            "This installer must be run from Arch Linux"
+
         return 1
     fi
 
@@ -354,14 +311,18 @@ check_project_structure()
     do
         if [[ ! -d "$directory" ]]
         then
-            die "Missing project directory: ${directory}"
+            die \
+                "Missing project directory: ${directory}"
+
             return 1
         fi
     done
 
     if [[ ! -d /mnt ]]
     then
-        die "Target directory /mnt is missing"
+        die \
+            "Target directory /mnt is missing"
+
         return 1
     fi
 
@@ -378,13 +339,17 @@ check_terminal()
 
     if [[ ! -e /dev/tty ]]
     then
-        die "/dev/tty is unavailable"
+        die \
+            "/dev/tty is unavailable"
+
         return 1
     fi
 
     if [[ ! -r /dev/tty || ! -w /dev/tty ]]
     then
-        die "/dev/tty is not readable/writable"
+        die \
+            "/dev/tty is not readable/writable"
+
         return 1
     fi
 
@@ -395,27 +360,33 @@ check_terminal()
 
     if [[ "$TERM" == "dumb" ]]
     then
-        die "Unsupported terminal: TERM=dumb"
+        die \
+            "Unsupported terminal: TERM=dumb"
+
         return 1
     fi
 
     if ! command -v tput >/dev/null 2>&1
     then
-        die "tput not found"
+        die \
+            "tput not found"
+
         return 1
     fi
 
     if ! command -v stty >/dev/null 2>&1
     then
-        die "stty not found"
+        die \
+            "stty not found"
+
         return 1
     fi
 
-    open_terminal_fd || return 1
-
-    if ! stty -g <&"$TUI_TTY_FD" >/dev/null 2>&1
+    if ! stty -g </dev/tty >/dev/null 2>&1
     then
-        die "Controlling terminal does not support terminal ioctls"
+        die \
+            "Controlling terminal does not support terminal ioctls"
+
         return 1
     fi
 
@@ -456,7 +427,9 @@ check_dependencies()
     do
         if ! command -v "$command_name" >/dev/null 2>&1
         then
-            die "Missing program: ${command_name}"
+            die \
+                "Missing program: ${command_name}"
+
             return 1
         fi
     done
@@ -522,6 +495,7 @@ check_config_api()
         then
             die \
                 "config.sh API function unavailable: ${function_name}"
+
             return 1
         fi
 
@@ -630,6 +604,7 @@ detect_partition_table()
             *)
                 die \
                     "Cannot determine partition table without valid boot mode"
+
                 return 1
                 ;;
         esac
@@ -662,6 +637,13 @@ check_installer_api()
     bootstrap_output \
         "Checking installer controller API..."
 
+    #
+    # IMPORTANT:
+    #
+    # Keep this list synchronized with installer/installer.sh.
+    # installer_full_installation_stages() is NOT required by
+    # the current controller implementation.
+    #
     for function_name in \
         installer_run \
         installer_full_install \
@@ -670,7 +652,6 @@ check_installer_api()
         installer_check_all_stages \
         installer_get_stage_function \
         installer_get_stage_title \
-        installer_full_installation_stages \
         installer_start_menu \
         installer_main
     do
@@ -694,6 +675,9 @@ check_installer_api()
         logger_info \
             "Installer controller API check passed"
     fi
+
+    bootstrap_output \
+        "Installer controller API: OK"
 
     return 0
 }
@@ -743,6 +727,7 @@ load_installer_modules()
     require_installer installer.sh || {
         bootstrap_output \
             "ERROR: installer/installer.sh failed to load"
+
         return 1
     }
 
@@ -768,6 +753,7 @@ load_installer_modules()
     then
         die \
             "menu_main() is not available after loading menu_main.sh"
+
         return 1
     fi
 
@@ -779,6 +765,9 @@ load_installer_modules()
         logger_info \
             "Installer modules loaded"
     fi
+
+    bootstrap_output \
+        "Installer modules: OK"
 
     return 0
 }
@@ -794,13 +783,17 @@ app_init()
 
     if ! declare -F tui_init >/dev/null 2>&1
     then
-        die "tui_init() is unavailable"
+        die \
+            "tui_init() is unavailable"
+
         return 1
     fi
 
     if ! tui_init
     then
-        die "tui_init() failed"
+        die \
+            "tui_init() failed"
+
         return 1
     fi
 
@@ -809,13 +802,16 @@ app_init()
 
     if ! declare -F tui_start >/dev/null 2>&1
     then
-        die "tui_start() is unavailable"
+        die \
+            "tui_start() is unavailable"
+
         return 1
     fi
 
     if ! tui_start
     then
-        die "tui_start() failed"
+        die \
+            "tui_start() failed"
 
         if declare -F tui_restore >/dev/null 2>&1
         then
@@ -827,9 +823,21 @@ app_init()
 
     TUI_READY=1
 
-    if declare -F terminal_title >/dev/null 2>&1
+    #--------------------------------------------------------
+    # Set terminal title.
+    #
+    # The current tui.sh exports tui_set_title() and
+    # tui_terminal_title(), not terminal_title().
+    #--------------------------------------------------------
+
+    if declare -F tui_set_title >/dev/null 2>&1
     then
-        terminal_title \
+        tui_set_title \
+            "$APP_NAME" \
+            || true
+    elif declare -F tui_terminal_title >/dev/null 2>&1
+    then
+        tui_terminal_title \
             "$APP_NAME" \
             || true
     fi
@@ -859,7 +867,9 @@ draw_startup()
 {
     if ! declare -F tui_clear >/dev/null 2>&1
     then
-        die "tui_clear() is unavailable"
+        die \
+            "tui_clear() is unavailable"
+
         return 1
     fi
 
@@ -867,13 +877,25 @@ draw_startup()
 
     if ! declare -F titlebar_draw >/dev/null 2>&1
     then
-        die "titlebar_draw() is unavailable"
+        die \
+            "titlebar_draw() is unavailable"
+
         return 1
     fi
 
     titlebar_draw \
         "$APP_NAME" \
         || return 1
+
+    tui_move 3 5
+
+    color_info \
+        "Arch Linux Installation System"
+
+    tui_move 4 5
+
+    tui_print \
+        "Initializing installer..."
 
     if declare -F statusbar_draw >/dev/null 2>&1
     then
@@ -913,21 +935,6 @@ cleanup()
 
         TUI_READY=0
     fi
-
-    #--------------------------------------------------------
-    # Restore terminal
-    #--------------------------------------------------------
-
-    if declare -F terminal_restore >/dev/null 2>&1
-    then
-        terminal_restore || true
-    fi
-
-    #--------------------------------------------------------
-    # Close controlling terminal
-    #--------------------------------------------------------
-
-    close_terminal_fd
 
     #--------------------------------------------------------
     # Close logger
@@ -1069,6 +1076,7 @@ main()
     then
         bootstrap_output \
             "ERROR: Failed to initialize logger"
+
         return 1
     fi
 
@@ -1214,6 +1222,7 @@ main()
     then
         die \
             "menu_main() is not available"
+
         return 1
     fi
 
@@ -1248,3 +1257,4 @@ main()
 
 main "$@"
 exit $?
+```

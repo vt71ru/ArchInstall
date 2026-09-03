@@ -333,6 +333,8 @@ tui_restore_terminal()
 
     if stty "$TUI_STTY_STATE" <&"$TUI_FD" 2>/dev/null
     then
+        TUI_STTY_SAVED=0
+        TUI_STTY_STATE=""
         return 0
     fi
 
@@ -341,6 +343,8 @@ tui_restore_terminal()
 
     if stty sane <&"$TUI_FD" 2>/dev/null
     then
+        TUI_STTY_SAVED=0
+        TUI_STTY_STATE=""
         return 0
     fi
 
@@ -526,10 +530,10 @@ tui_start()
 
     tui_update_size || return 1
 
-    if (( TUI_ROWS < 18 || TUI_COLS < 60 ))
+    if (( TUI_ROWS < 12 || TUI_COLS < 40 ))
     then
         tui_log_error \
-            "TUI: terminal too small: ${TUI_COLS}x${TUI_ROWS}; minimum 60x18"
+            "TUI: terminal too small: ${TUI_COLS}x${TUI_ROWS}; minimum 40x12"
 
         return 1
     fi
@@ -1260,49 +1264,28 @@ event_read_csi()
         fi
     done
 
-    case "$seq"
-    in
-        "[A"|
-        "[1;2A"|
-        "[1;3A"|
-        "[1;4A"|
-        "[1;5A")
+    case "$seq" in
+        "[A"|"[1;2A"|"[1;3A"|"[1;4A"|"[1;5A")
             TUI_EVENT="$EVENT_UP"
             ;;
 
-        "[B"|
-        "[1;2B"|
-        "[1;3B"|
-        "[1;4B"|
-        "[1;5B")
+        "[B"|"[1;2B"|"[1;3B"|"[1;4B"|"[1;5B")
             TUI_EVENT="$EVENT_DOWN"
             ;;
 
-        "[C"|
-        "[1;2C"|
-        "[1;3C"|
-        "[1;4C"|
-        "[1;5C")
+        "[C"|"[1;2C"|"[1;3C"|"[1;4C"|"[1;5C")
             TUI_EVENT="$EVENT_RIGHT"
             ;;
 
-        "[D"|
-        "[1;2D"|
-        "[1;3D"|
-        "[1;4D"|
-        "[1;5D")
+        "[D"|"[1;2D"|"[1;3D"|"[1;4D"|"[1;5D")
             TUI_EVENT="$EVENT_LEFT"
             ;;
 
-        "[H"|
-        "[1~"|
-        "[7~")
+        "[H"|"[1~"|"[7~")
             TUI_EVENT="$EVENT_HOME"
             ;;
 
-        "[F"|
-        "[4~"|
-        "[8~")
+        "[F"|"[4~"|"[8~")
             TUI_EVENT="$EVENT_END"
             ;;
 
@@ -1496,8 +1479,7 @@ event_read()
             fi
             ;;
 
-        $'\n'|
-        $'\r')
+        $'\n'|$'\r')
             TUI_EVENT="$EVENT_SELECT"
             ;;
 
@@ -1509,8 +1491,7 @@ event_read()
             TUI_EVENT="$EVENT_TAB"
             ;;
 
-        $'\177'|
-        $'\b')
+        $'\177'|$'\b')
             TUI_EVENT="$EVENT_DELETE"
             ;;
 
@@ -1520,19 +1501,9 @@ event_read()
             ;;
     esac
 
-    #
-    # Compatibility:
-    #
-    # Both APIs are supported:
-    #
-    #   event_read
-    #
-    # and:
-    #
-    #   event="$(event_read)"
-    #
-    printf '%s' "$TUI_EVENT"
-
+    # event_read updates TUI_EVENT and TUI_EVENT_CHAR in the current shell.
+    # Do not use command substitution here: it would execute in a subshell
+    # and the updated global state would be lost.
     return 0
 }
 
@@ -1556,14 +1527,7 @@ event_is_navigation()
 
     case "$event"
     in
-        "$EVENT_UP"|
-        "$EVENT_DOWN"|
-        "$EVENT_LEFT"|
-        "$EVENT_RIGHT"|
-        "$EVENT_HOME"|
-        "$EVENT_END"|
-        "$EVENT_PAGE_UP"|
-        "$EVENT_PAGE_DOWN")
+        "$EVENT_UP"|"$EVENT_DOWN"|"$EVENT_LEFT"|"$EVENT_RIGHT"|"$EVENT_HOME"|"$EVENT_END"|"$EVENT_PAGE_UP"|"$EVENT_PAGE_DOWN")
             return 0
             ;;
     esac
@@ -1777,8 +1741,7 @@ dialog_message()
 
         case "$TUI_EVENT"
         in
-            "$EVENT_SELECT"|
-            "$EVENT_BACK")
+            "$EVENT_SELECT"|"$EVENT_BACK")
                 return 0
                 ;;
         esac

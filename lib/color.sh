@@ -1,4 +1,3 @@
-```bash
 #!/usr/bin/env bash
 #
 #============================================================
@@ -354,4 +353,3 @@ colors_test()
     color_dim \
         'Secondary information'
 }
-```

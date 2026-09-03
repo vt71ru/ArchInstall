@@ -51,6 +51,7 @@ EVENT_TAB="TAB"
 EVENT_TAB_BACK="TAB_BACK"
 
 EVENT_DELETE="DELETE"
+EVENT_INSERT="INSERT"
 
 EVENT_F1="F1"
 EVENT_F2="F2"
@@ -146,28 +147,41 @@ tui_open_terminal()
 {
     if (( TUI_FD >= 0 ))
     then
-        return 0
+        if tty <&"$TUI_FD" >/dev/null 2>&1
+        then
+            return 0
+        fi
+
+        TUI_FD=-1
     fi
 
     if [[ ! -e "$TUI_TTY" ]]
     then
-        tui_log_error "TUI: terminal device not found: $TUI_TTY"
+        tui_log_error \
+            "TUI: terminal device not found: $TUI_TTY"
         return 1
     fi
 
     if ! exec {TUI_FD}<>"$TUI_TTY"
     then
         TUI_FD=-1
-        tui_log_error "TUI: cannot open terminal: $TUI_TTY"
+
+        tui_log_error \
+            "TUI: cannot open terminal: $TUI_TTY"
+
         return 1
     fi
 
     if ! tty <&"$TUI_FD" >/dev/null 2>&1
     then
-        tui_log_error "TUI: opened device is not a TTY"
+        tui_log_error \
+            "TUI: opened device is not a TTY"
+
         exec {TUI_FD}>&- 2>/dev/null || true
         exec {TUI_FD}<&- 2>/dev/null || true
+
         TUI_FD=-1
+
         return 1
     fi
 
@@ -176,13 +190,17 @@ tui_open_terminal()
 
 tui_close_terminal()
 {
-    if (( TUI_FD >= 0 ))
+    local fd="${TUI_FD:--1}"
+
+    if (( fd >= 0 ))
     then
-        exec {TUI_FD}>&- 2>/dev/null || true
-        exec {TUI_FD}<&- 2>/dev/null || true
+        exec {fd}>&- 2>/dev/null || true
+        exec {fd}<&- 2>/dev/null || true
     fi
 
     TUI_FD=-1
+
+    return 0
 }
 
 tui_require_tty()
@@ -194,7 +212,9 @@ tui_require_tty()
 
     if ! tty <&"$TUI_FD" >/dev/null 2>&1
     then
-        tui_log_error "TUI: terminal FD is not a TTY"
+        tui_log_error \
+            "TUI: terminal FD is not a TTY"
+
         return 1
     fi
 
@@ -208,12 +228,14 @@ tui_require_tty()
 tui_print()
 {
     tui_require_tty || return 1
+
     printf '%s' "$*" >&"$TUI_FD"
 }
 
 tui_printf()
 {
     tui_require_tty || return 1
+
     printf "$@" >&"$TUI_FD"
 }
 
@@ -235,11 +257,21 @@ tui_save_terminal()
         return 0
     fi
 
-    local state
+    local state=""
 
     if ! state="$(stty -g <&"$TUI_FD" 2>/dev/null)"
     then
-        tui_log_error "TUI: unable to save terminal state"
+        tui_log_error \
+            "TUI: unable to save terminal state"
+
+        return 1
+    fi
+
+    if [[ -z "$state" ]]
+    then
+        tui_log_error \
+            "TUI: saved terminal state is empty"
+
         return 1
     fi
 
@@ -251,20 +283,34 @@ tui_save_terminal()
 
 tui_restore_terminal()
 {
-    if (( TUI_FD < 0 ))
+    local fd="${TUI_FD:--1}"
+
+    if (( fd < 0 ))
     then
         return 0
     fi
 
-    if (( TUI_STTY_SAVED ))
+    #
+    # First try to restore the exact state that existed
+    # before TUI started.
+    #
+    if (( TUI_STTY_SAVED )) &&
+       [[ -n "${TUI_STTY_STATE:-}" ]]
     then
-        if ! stty "$TUI_STTY_STATE" <&"$TUI_FD" 2>/dev/null
+        if stty "$TUI_STTY_STATE" <&"$fd" 2>/dev/null
         then
-            stty sane <&"$TUI_FD" 2>/dev/null || true
+            TUI_STTY_SAVED=0
+            TUI_STTY_STATE=""
+            return 0
         fi
-    else
-        stty sane <&"$TUI_FD" 2>/dev/null || true
     fi
+
+    #
+    # Fallback. This is deliberately conservative:
+    # it makes the terminal usable even if the saved state
+    # is unavailable or corrupted.
+    #
+    stty sane <&"$fd" 2>/dev/null || true
 
     TUI_STTY_SAVED=0
     TUI_STTY_STATE=""
@@ -323,13 +369,17 @@ tui_update_size()
               "$cols" -le 0 ]]
         then
             read -r rows cols < <(
-                stty size <&"$TUI_FD" 2>/dev/null || printf '24 80\n'
+                stty size <&"$TUI_FD" 2>/dev/null ||
+                printf '24 80\n'
             )
         fi
     fi
 
     [[ "$rows" =~ ^[0-9]+$ ]] || rows=24
     [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
+
+    (( rows > 0 )) || rows=24
+    (( cols > 0 )) || cols=80
 
     TUI_ROWS="$rows"
     TUI_COLS="$cols"
@@ -348,16 +398,27 @@ tui_init()
         return 0
     fi
 
+    #
+    # Open /dev/tty.
+    #
     tui_open_terminal || return 1
-    tui_save_terminal || {
+
+    #
+    # Save the real terminal state BEFORE modifying stty.
+    #
+    if ! tui_save_terminal
+    then
         tui_close_terminal
         return 1
-    }
+    fi
 
     tui_update_size
     tui_detect_capabilities
 
     TUI_INITIALIZED=1
+    TUI_ACTIVE=0
+    TUI_ALT_SCREEN=0
+    TUI_CURSOR_HIDDEN=0
 
     return 0
 }
@@ -366,6 +427,10 @@ tui_enable_input()
 {
     tui_require_tty || return 1
 
+    #
+    # Do not use echoctl changes here.
+    # Keep the modification minimal.
+    #
     if ! stty \
         -echo \
         -echonl \
@@ -375,19 +440,39 @@ tui_enable_input()
         time 0 \
         <&"$TUI_FD"
     then
-        tui_log_error "TUI: unable to configure terminal input"
+        tui_log_error \
+            "TUI: unable to configure terminal input"
+
         return 1
     fi
 
     return 0
 }
 
+tui_disable_input()
+{
+    tui_restore_terminal
+    return 0
+}
+
+#============================================================
+# TUI START
+#============================================================
+
 tui_start()
 {
+    local started_alt=0
+    local input_enabled=0
+
     if (( ! TUI_INITIALIZED ))
     then
-        tui_init || return 1
+        if ! tui_init
+        then
+            return 1
+        fi
     fi
+
+    tui_require_tty || return 1
 
     tui_update_size
 
@@ -395,28 +480,84 @@ tui_start()
     then
         tui_log_error \
             "TUI: terminal too small (${TUI_COLS}x${TUI_ROWS}), minimum 40x12"
+
+        tui_restore
         return 1
     fi
 
-    tui_enable_input || return 1
-
-    if (( ! TUI_ALT_SCREEN ))
+    #
+    # Change input mode.
+    #
+    if ! tui_enable_input
     then
-        tui_printf '\033[?1049h'
-        TUI_ALT_SCREEN=1
+        tui_restore
+        return 1
     fi
 
-    tui_clear
+    input_enabled=1
 
-    tui_printf '\033[?25l'
+    #
+    # Enter alternate screen.
+    #
+    if (( ! TUI_ALT_SCREEN ))
+    then
+        if ! tui_printf '\033[?1049h'
+        then
+            tui_log_error \
+                "TUI: unable to enter alternate screen"
+
+            if (( input_enabled ))
+            then
+                tui_restore_terminal
+            fi
+
+            tui_restore
+            return 1
+        fi
+
+        TUI_ALT_SCREEN=1
+        started_alt=1
+    fi
+
+    #
+    # Clear alternate screen.
+    #
+    if ! tui_clear
+    then
+        tui_log_error \
+            "TUI: unable to clear screen"
+
+        tui_restore
+        return 1
+    fi
+
+    #
+    # Hide cursor.
+    #
+    if ! tui_printf '\033[?25l'
+    then
+        tui_log_error \
+            "TUI: unable to hide cursor"
+
+        tui_restore
+        return 1
+    fi
+
     TUI_CURSOR_HIDDEN=1
 
-    tui_printf '\033[0m'
+    #
+    # Reset attributes.
+    #
+    tui_printf '\033[0m' || true
 
     TUI_ACTIVE=1
 
     return 0
 }
+
+#============================================================
+# TUI ABORT
+#============================================================
 
 tui_abort_start()
 {
@@ -424,30 +565,56 @@ tui_abort_start()
     return 0
 }
 
+#============================================================
+# TUI RESTORE
+#============================================================
+
 tui_restore()
 {
-    if (( TUI_FD < 0 ))
+    local fd="${TUI_FD:--1}"
+
+    #
+    # Nothing is open.
+    #
+    if (( fd < 0 ))
     then
         TUI_ACTIVE=0
         TUI_INITIALIZED=0
+        TUI_ALT_SCREEN=0
+        TUI_CURSOR_HIDDEN=0
+        TUI_STTY_SAVED=0
+        TUI_STTY_STATE=""
         return 0
     fi
 
-    if (( TUI_CURSOR_HIDDEN ))
-    then
-        tui_printf '\033[?25h' 2>/dev/null || true
-        TUI_CURSOR_HIDDEN=0
-    fi
+    #
+    # Restore terminal attributes FIRST.
+    #
+    # This is important if the program terminates while
+    # the input mode is still non-canonical/no-echo.
+    #
+    tui_restore_terminal
 
-    tui_printf '\033[0m' 2>/dev/null || true
+    #
+    # Restore cursor.
+    #
+    printf '\033[0m\033[?25h' >&"$fd" 2>/dev/null || true
 
+    TUI_CURSOR_HIDDEN=0
+
+    #
+    # Leave alternate screen.
+    #
     if (( TUI_ALT_SCREEN ))
     then
-        tui_printf '\033[?1049l' 2>/dev/null || true
+        printf '\033[?1049l' >&"$fd" 2>/dev/null || true
         TUI_ALT_SCREEN=0
     fi
 
-    tui_restore_terminal
+    #
+    # Put cursor at home and reset attributes.
+    #
+    printf '\033[0m\033[H' >&"$fd" 2>/dev/null || true
 
     TUI_ACTIVE=0
     TUI_INITIALIZED=0
@@ -455,10 +622,21 @@ tui_restore()
     return 0
 }
 
+#============================================================
+# SHUTDOWN
+#============================================================
+
 tui_shutdown()
 {
     tui_restore
+
     tui_close_terminal
+
+    TUI_ACTIVE=0
+    TUI_INITIALIZED=0
+    TUI_ALT_SCREEN=0
+    TUI_CURSOR_HIDDEN=0
+
     return 0
 }
 
@@ -477,7 +655,7 @@ tui_move()
     (( row < 1 )) && row=1
     (( col < 1 )) && col=1
 
-    tui_printf '\033[%d;%dH' "$row" "$col"
+    tui_printf '\033[%d;%dH' "$row" "$col" || return 1
 
     TUI_CURSOR_ROW="$row"
     TUI_CURSOR_COL="$col"
@@ -497,14 +675,20 @@ tui_cursor_home()
 
 tui_cursor_hide()
 {
-    tui_printf '\033[?25l'
+    tui_printf '\033[?25l' || return 1
+
     TUI_CURSOR_HIDDEN=1
+
+    return 0
 }
 
 tui_cursor_show()
 {
-    tui_printf '\033[?25h'
+    tui_printf '\033[?25h' || return 1
+
     TUI_CURSOR_HIDDEN=0
+
+    return 0
 }
 
 #============================================================
@@ -518,13 +702,18 @@ tui_color()
 
     if [[ -z "$code" ]]
     then
-        tui_log_error "TUI: empty color code"
+        tui_log_error \
+            "TUI: empty color code"
+
         return 1
     fi
 
     if (( TUI_COLOR_ENABLED ))
     then
-        tui_printf '\033[%sm%s\033[0m' "$code" "$text"
+        tui_printf \
+            '\033[%sm%s\033[0m' \
+            "$code" \
+            "$text"
     else
         tui_print "$text"
     fi
@@ -618,9 +807,12 @@ tui_corner_br()
 
 tui_clear()
 {
-    tui_printf '\033[2J\033[H'
+    tui_printf '\033[2J\033[H' || return 1
+
     TUI_CURSOR_ROW=1
     TUI_CURSOR_COL=1
+
+    return 0
 }
 
 screen_clear()
@@ -630,8 +822,9 @@ screen_clear()
 
 screen_prepare()
 {
-    tui_clear
-    tui_cursor_hide
+    tui_clear || return 1
+    tui_cursor_hide || return 1
+    return 0
 }
 
 screen_refresh()
@@ -677,8 +870,8 @@ draw_box()
 
     bottom="$top"
 
-    tui_move "$row" "$col"
-    tui_char "┌${top}┐" "+${top//─/-}+"
+    tui_move "$row" "$col" || return 1
+    tui_char "┌${top}┐" "+${top//─/-}+" || return 1
 
     if [[ -n "$title" && "$width" -gt 6 ]]
     then
@@ -690,26 +883,46 @@ draw_box()
             local left=$(( (width - 2 - title_len) / 2 ))
             local right=$(( width - 2 - title_len - left ))
 
-            tui_move "$row" "$col"
+            tui_move "$row" "$col" || return 1
             tui_print "┌"
-            printf '%*s' "$left" '' | tr ' ' '─'
-            color_title "$title_text"
-            printf '%*s' "$right" '' | tr ' ' '─'
+
+            if (( left > 0 ))
+            then
+                printf '%*s' "$left" '' |
+                    tr ' ' '─' >&"$TUI_FD"
+            fi
+
+            color_title "$title_text" || return 1
+
+            if (( right > 0 ))
+            then
+                printf '%*s' "$right" '' |
+                    tr ' ' '─' >&"$TUI_FD"
+            fi
+
             tui_print "┐"
         fi
     fi
 
     for (( i=1; i<height-1; i++ ))
     do
-        tui_move "$(( row + i ))" "$col"
-        tui_char '│' '|'
+        tui_move "$(( row + i ))" "$col" || return 1
+        tui_char '│' '|' || return 1
 
-        tui_move "$(( row + i ))" "$(( col + width - 1 ))"
-        tui_char '│' '|'
+        tui_move \
+            "$(( row + i ))" \
+            "$(( col + width - 1 ))" || return 1
+
+        tui_char '│' '|' || return 1
     done
 
-    tui_move "$(( row + height - 1 ))" "$col"
-    tui_char "└${bottom}┘" "+${bottom//─/-}+"
+    tui_move \
+        "$(( row + height - 1 ))" \
+        "$col" || return 1
+
+    tui_char \
+        "└${bottom}┘" \
+        "+${bottom//─/-}+" || return 1
 
     return 0
 }
@@ -729,17 +942,16 @@ titlebar_draw()
     local title="${1:-Arch Installer}"
     local width="${TUI_COLS:-80}"
 
-    tui_move 1 1
+    tui_move 1 1 || return 1
 
     local line
     line="$(printf '%*s' "$width" '')"
-    line="${line// / }"
 
-    tui_printf '\033[0m'
-    tui_printf '%s' "$line"
+    tui_printf '\033[0m' || return 1
+    tui_print "$line" || return 1
 
-    tui_move 1 3
-    color_title " $title "
+    tui_move 1 3 || return 1
+    color_title " $title " || return 1
 
     return 0
 }
@@ -750,15 +962,15 @@ statusbar_draw()
     local row="${TUI_ROWS:-24}"
     local width="${TUI_COLS:-80}"
 
-    tui_move "$row" 1
+    tui_move "$row" 1 || return 1
 
     local line
     line="$(printf '%*s' "$width" '')"
 
-    tui_print "$line"
+    tui_print "$line" || return 1
 
-    tui_move "$row" 2
-    tui_print "$text"
+    tui_move "$row" 2 || return 1
+    tui_print "$text" || return 1
 
     return 0
 }
@@ -769,7 +981,7 @@ tui_text()
     local col="${2:-1}"
     local text="${3-}"
 
-    tui_move "$row" "$col"
+    tui_move "$row" "$col" || return 1
     tui_print "$text"
 }
 
@@ -781,9 +993,13 @@ event_read_csi()
 {
     local sequence=""
     local ch=""
-    local rc=0
 
-    while IFS= read -r -s -n 1 -t "$TUI_ESCAPE_TIMEOUT" ch <&"$TUI_FD"
+    while IFS= read \
+        -r \
+        -s \
+        -n 1 \
+        -t "$TUI_ESCAPE_TIMEOUT" \
+        ch <&"$TUI_FD"
     do
         sequence+="$ch"
 
@@ -795,6 +1011,7 @@ event_read_csi()
     done
 
     case "$sequence" in
+
         A)
             TUI_EVENT="$EVENT_UP"
             ;;
@@ -916,21 +1133,27 @@ event_read_csi()
             ;;
     esac
 
-    return "$rc"
+    return 0
 }
 
 event_read()
 {
     local key=""
     local next=""
-    local rc=0
 
     TUI_EVENT="$EVENT_NONE"
     TUI_EVENT_CHAR=""
 
     tui_require_tty || return 1
 
-    if ! IFS= read -r -s -n 1 key <&"$TUI_FD"
+    #
+    # Read exactly one byte.
+    #
+    if ! IFS= read \
+        -r \
+        -s \
+        -n 1 \
+        key <&"$TUI_FD"
     then
         return 1
     fi
@@ -940,11 +1163,19 @@ event_read()
         $'\e')
             #
             # ESC is ambiguous:
-            #   ESC alone      -> BACK
-            #   ESC [ ...      -> CSI sequence
-            #   ESC O ...      -> SS3 sequence
             #
-            if IFS= read -r -s -n 1 -t "$TUI_ESCAPE_TIMEOUT" next <&"$TUI_FD"
+            #   ESC alone      -> BACK
+            #   ESC [ ...      -> CSI
+            #   ESC O ...      -> SS3
+            #
+            # We wait only a short time for the second byte.
+            #
+            if IFS= read \
+                -r \
+                -s \
+                -n 1 \
+                -t "$TUI_ESCAPE_TIMEOUT" \
+                next <&"$TUI_FD"
             then
                 case "$next" in
 
@@ -953,7 +1184,12 @@ event_read()
                         ;;
 
                     "O")
-                        if IFS= read -r -s -n 1 -t "$TUI_ESCAPE_TIMEOUT" next <&"$TUI_FD"
+                        if IFS= read \
+                            -r \
+                            -s \
+                            -n 1 \
+                            -t "$TUI_ESCAPE_TIMEOUT" \
+                            next <&"$TUI_FD"
                         then
                             case "$next" in
                                 A) TUI_EVENT="$EVENT_UP" ;;
@@ -974,13 +1210,18 @@ event_read()
                         ;;
 
                     *)
+                        #
+                        # We received ESC followed by an ordinary
+                        # character. Do not interpret that character
+                        # as a menu command.
+                        #
                         TUI_EVENT="$EVENT_NONE"
                         ;;
                 esac
             else
                 #
-                # No second byte arrived.
-                # Therefore this is a real standalone ESC.
+                # No second byte:
+                # standalone ESC.
                 #
                 TUI_EVENT="$EVENT_BACK"
             fi
@@ -1008,7 +1249,7 @@ event_read()
             ;;
     esac
 
-    return "$rc"
+    return 0
 }
 
 tui_input()
@@ -1033,21 +1274,27 @@ dialog_message()
     (( width < 30 )) && width=30
     (( width > 70 )) && width=70
 
+    local top=$(( (TUI_ROWS - height) / 2 ))
+    local left=$(( (TUI_COLS - width) / 2 ))
+
+    (( top < 1 )) && top=1
+    (( left < 1 )) && left=1
+
     draw_box \
-        "$(( (TUI_ROWS - height) / 2 ))" \
-        "$(( (TUI_COLS - width) / 2 ))" \
+        "$top" \
+        "$left" \
         "$height" \
         "$width" \
-        "$title"
+        "$title" || return 1
 
-    local row=$(( (TUI_ROWS - height) / 2 + 2 ))
-    local col=$(( (TUI_COLS - width) / 2 + 3 ))
+    local row=$(( top + 2 ))
+    local col=$(( left + 3 ))
 
-    tui_move "$row" "$col"
-    tui_print "$message"
+    tui_move "$row" "$col" || return 1
+    tui_print "$message" || return 1
 
-    tui_move "$(( row + height - 3 ))" "$col"
-    color_info "Press Enter to continue"
+    tui_move "$(( row + height - 3 ))" "$col" || return 1
+    color_info "Press Enter to continue" || return 1
 
     while true
     do
@@ -1078,6 +1325,7 @@ dialog_warning()
     local message="${2:-}"
 
     tui_log_warn "$message"
+
     dialog_message "$title" "$message"
 }
 
@@ -1086,15 +1334,6 @@ dialog_error()
     local title="Error"
     local message="${1:-Unknown error}"
 
-    #
-    # Compatible with both:
-    #
-    #   dialog_error "message"
-    #
-    # and:
-    #
-    #   dialog_error "title" "message"
-    #
     if (( $# >= 2 ))
     then
         title="${1:-Error}"
@@ -1123,21 +1362,33 @@ dialog_confirm()
     local top=$(( (TUI_ROWS - height) / 2 ))
     local left=$(( (TUI_COLS - width) / 2 ))
 
+    (( top < 1 )) && top=1
+    (( left < 1 )) && left=1
+
     draw_box \
         "$top" \
         "$left" \
         "$height" \
         "$width" \
-        "Confirm"
+        "Confirm" || return 1
 
-    tui_move "$(( top + 2 ))" "$(( left + 3 ))"
-    tui_print "$message"
+    tui_move \
+        "$(( top + 2 ))" \
+        "$(( left + 3 ))" || return 1
 
-    tui_move "$(( top + height - 3 ))" "$(( left + 3 ))"
-    color_success "[Enter] Yes"
+    tui_print "$message" || return 1
 
-    tui_move "$(( top + height - 2 ))" "$(( left + 3 ))"
-    color_warning "[Esc] No"
+    tui_move \
+        "$(( top + height - 3 ))" \
+        "$(( left + 3 ))" || return 1
+
+    color_success "[Enter] Yes" || return 1
+
+    tui_move \
+        "$(( top + height - 2 ))" \
+        "$(( left + 3 ))" || return 1
+
+    color_warning "[Esc] No" || return 1
 
     while true
     do
@@ -1147,6 +1398,7 @@ dialog_confirm()
         fi
 
         case "${TUI_EVENT:-}" in
+
             "$EVENT_SELECT")
                 return 0
                 ;;
@@ -1166,6 +1418,7 @@ tui_menu()
 {
     local title="${1:-Menu}"
     local selected="${2:-0}"
+
     shift 2 || true
 
     local items=( "$@" )
@@ -1173,34 +1426,38 @@ tui_menu()
 
     (( item_count == 0 )) && return 1
 
+    [[ "$selected" =~ ^[0-9]+$ ]] || selected=0
+
     (( selected < 0 )) && selected=0
-    (( selected >= item_count )) && selected=$(( item_count - 1 ))
+    (( selected >= item_count )) &&
+        selected=$(( item_count - 1 ))
 
     while true
     do
-        tui_clear
+        tui_clear || return 1
 
-        titlebar_draw "$title"
+        titlebar_draw "$title" || return 1
 
         local i
         local row=4
 
         for (( i=0; i<item_count; i++ ))
         do
-            tui_move "$row" 5
+            tui_move "$row" 5 || return 1
 
             if (( i == selected ))
             then
-                color_selected "> ${items[i]}"
+                color_selected "> ${items[i]}" || return 1
             else
-                tui_print "  ${items[i]}"
+                tui_print "  ${items[i]}" || return 1
             fi
 
             (( row++ ))
         done
 
         statusbar_draw \
-            "↑↓ Navigate   Enter Select   Esc Back"
+            "↑↓ Navigate   Enter Select   Esc Back" ||
+            return 1
 
         if ! event_read
         then
@@ -1210,11 +1467,17 @@ tui_menu()
         case "${TUI_EVENT:-}" in
 
             "$EVENT_UP")
-                (( selected > 0 )) && (( selected-- ))
+                if (( selected > 0 ))
+                then
+                    (( selected-- ))
+                fi
                 ;;
 
             "$EVENT_DOWN")
-                (( selected < item_count - 1 )) && (( selected++ ))
+                if (( selected < item_count - 1 ))
+                then
+                    (( selected++ ))
+                fi
                 ;;
 
             "$EVENT_HOME")
@@ -1278,19 +1541,24 @@ progress_update()
     [[ "$value" =~ ^[0-9]+$ ]] || value=0
 
     (( value < 0 )) && value=0
-    (( value > TUI_PROGRESS_MAX )) && value="$TUI_PROGRESS_MAX"
+    (( value > TUI_PROGRESS_MAX )) &&
+        value="$TUI_PROGRESS_MAX"
 
     TUI_PROGRESS_VALUE="$value"
 
     tui_update_size
 
     local width=$(( TUI_COLS - 10 ))
+
     (( width < 30 )) && width=30
 
     local row=$(( TUI_ROWS / 2 ))
     local col=$(( (TUI_COLS - width) / 2 ))
 
-    tui_move "$row" "$col"
+    (( row < 1 )) && row=1
+    (( col < 1 )) && col=1
+
+    tui_move "$row" "$col" || return 1
 
     local percent=0
 
@@ -1300,6 +1568,7 @@ progress_update()
     fi
 
     local bar_width=$(( width - 10 ))
+
     (( bar_width < 10 )) && bar_width=10
 
     local filled=$(( percent * bar_width / 100 ))
@@ -1315,18 +1584,20 @@ progress_update()
 
     if (( empty > 0 ))
     then
-        local rest
+        local rest=""
+
         rest="$(printf '%*s' "$empty" '')"
         rest="${rest// /-}"
+
         bar+="$rest"
     fi
 
-    tui_print "[${bar}] ${percent}%"
+    tui_print "[${bar}] ${percent}%" || return 1
 
     if [[ -n "$message" ]]
     then
-        tui_move "$(( row + 2 ))" "$col"
-        tui_print "$message"
+        tui_move "$(( row + 2 ))" "$col" || return 1
+        tui_print "$message" || return 1
     fi
 
     return 0
@@ -1339,11 +1610,11 @@ progress_finish()
     progress_update \
         "${TUI_PROGRESS_MAX:-100}" \
         "$message"
-
-    return 0
 }
 
-# Compatibility aliases.
+#============================================================
+# COMPATIBILITY PROGRESS ALIASES
+#============================================================
 
 tui_progress_init()
 {
@@ -1368,7 +1639,9 @@ tui_set_title()
 {
     local title="${1:-Arch Installer}"
 
-    tui_printf '\033]0;%s\007' "$title"
+    tui_printf \
+        '\033]0;%s\007' \
+        "$title"
 }
 
 tui_terminal_title()
@@ -1390,13 +1663,6 @@ tui_on_signal()
     tui_restore
 }
 
-# Do not install traps here.
-#
-# The main controller owns global signal handling.
-# Installing traps from a library can interfere with
-# install.sh and installer.sh.
-#
 #============================================================
 # END OF lib/tui.sh
 #============================================================
-

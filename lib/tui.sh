@@ -1639,9 +1639,7 @@ tui_set_title()
 {
     local title="${1:-Arch Installer}"
 
-    tui_printf \
-        '\033]0;%s\007' \
-        "$title"
+    tui_printf '\033]0;%s\007' "$title"
 }
 
 tui_terminal_title()

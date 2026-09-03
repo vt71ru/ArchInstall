@@ -440,7 +440,7 @@ load_core_libraries()
     # Color system
     #--------------------------------------------------------
 
-    require_lib colors.sh || return 1
+    require_lib color.sh || return 1
 
     #--------------------------------------------------------
     # TUI

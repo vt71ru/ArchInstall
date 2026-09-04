@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-#============================================================
+# ============================================================
 # Arch Installer
-#------------------------------------------------------------
+# ------------------------------------------------------------
 # installer/installer.sh
 #
 # Центральный controller установки.
@@ -10,20 +10,16 @@
 # Ответственность:
 #   • запуск отдельных этапов
 #   • запуск полной установки
-#   • проверка наличия stage-функций
+#   • проверка этапов
 #   • контроль порядка выполнения
 #   • возврат кодов ошибок
 #
 # Не содержит:
 #   • TUI
-#   • отрисовку меню
-#   • низкоуровневую работу с терминалом
+#   • непосредственную реализацию этапов
+#   • отрисовку главного меню
 #
-#============================================================
-
-#============================================================
-# LOAD GUARD
-#============================================================
+# ============================================================
 
 if [[ -n "${ARCH_INSTALLER_INSTALLER_SH_LOADED:-}" ]]
 then
@@ -33,63 +29,29 @@ fi
 ARCH_INSTALLER_INSTALLER_SH_LOADED=1
 export ARCH_INSTALLER_INSTALLER_SH_LOADED
 
-#============================================================
-# LOGGING
-#============================================================
 
-installer_log_info()
-{
-    if declare -F log_info >/dev/null 2>&1
-    then
-        log_info "$@" || true
-    elif declare -F logger_info >/dev/null 2>&1
-    then
-        logger_info "$@" || true
-    else
-        printf '[INFO] %s\n' "$*" >&2
-    fi
+# ============================================================
+# Этапы полной установки
+# ============================================================
+#
+# ВАЖНО:
+#
+# locale_generate выполняется ПОСЛЕ:
+#   filesystem
+#   mount
+#   packages
+#
+# потому что locale_generate.sh ожидает:
+#
+#   /mnt/etc/locale.gen
+#   /mnt/usr/bin/locale-gen
+#   смонтированную целевую систему
+#
+# ============================================================
 
-    return 0
-}
-
-installer_log_warn()
-{
-    if declare -F log_warn >/dev/null 2>&1
-    then
-        log_warn "$@" || true
-    elif declare -F logger_warn >/dev/null 2>&1
-    then
-        logger_warn "$@" || true
-    else
-        printf '[WARN] %s\n' "$*" >&2
-    fi
-
-    return 0
-}
-
-installer_log_error()
-{
-    if declare -F log_error >/dev/null 2>&1
-    then
-        log_error "$@" || true
-    elif declare -F logger_error >/dev/null 2>&1
-    then
-        logger_error "$@" || true
-    else
-        printf '[ERROR] %s\n' "$*" >&2
-    fi
-
-    return 0
-}
-
-#============================================================
-# STAGE DEFINITIONS
-#============================================================
-
-INSTALLER_STAGES=(
+declare -ar INSTALLER_STAGES=(
     "keyboard"
     "locale"
-    "locale_generate"
     "network"
     "mirrors"
     "disks"
@@ -97,6 +59,7 @@ INSTALLER_STAGES=(
     "filesystem"
     "mount"
     "packages"
+    "locale_generate"
     "users"
     "desktop"
     "services"
@@ -104,26 +67,90 @@ INSTALLER_STAGES=(
     "summary"
 )
 
-#============================================================
-# STAGE TITLES
-#============================================================
+
+# ============================================================
+# Logging wrappers
+# ============================================================
+
+installer_log_info()
+{
+    if declare -F log_info >/dev/null 2>&1
+    then
+        log_info "$*"
+    fi
+}
+
+installer_log_warn()
+{
+    if declare -F log_warn >/dev/null 2>&1
+    then
+        log_warn "$*"
+    fi
+}
+
+installer_log_error()
+{
+    if declare -F log_error >/dev/null 2>&1
+    then
+        log_error "$*"
+    fi
+}
+
+
+# ============================================================
+# Получить количество этапов
+# ============================================================
+
+installer_get_stage_count()
+{
+    printf '%s\n' "${#INSTALLER_STAGES[@]}"
+}
+
+
+# ============================================================
+# Получить имя этапа по индексу
+# ============================================================
+
+installer_get_stage_by_index()
+{
+    local index="${1:-}"
+
+    if [[ ! "$index" =~ ^[0-9]+$ ]]
+    then
+        installer_log_error \
+            "Invalid stage index: ${index}"
+
+        return 1
+    fi
+
+    if (( index < 0 || index >= ${#INSTALLER_STAGES[@]} ))
+    then
+        installer_log_error \
+            "Stage index out of range: ${index}"
+
+        return 1
+    fi
+
+    printf '%s\n' "${INSTALLER_STAGES[$index]}"
+}
+
+
+# ============================================================
+# Получить название этапа
+# ============================================================
 
 installer_get_stage_title()
 {
     local stage="${1:-}"
 
-    case "$stage"
-    in
+    case "$stage" in
+
         keyboard)
             printf '%s\n' "Keyboard configuration"
             ;;
 
         locale)
             printf '%s\n' "Locale configuration"
-            ;;
-
-        locale_generate)
-            printf '%s\n' "Generate locales"
             ;;
 
         network)
@@ -151,23 +178,27 @@ installer_get_stage_title()
             ;;
 
         packages)
-            printf '%s\n' "Package installation"
+            printf '%s\n' "Install base packages"
+            ;;
+
+        locale_generate)
+            printf '%s\n' "Generate system locale"
             ;;
 
         users)
-            printf '%s\n' "User configuration"
+            printf '%s\n' "Configure users"
             ;;
 
         desktop)
-            printf '%s\n' "Desktop installation"
+            printf '%s\n' "Install desktop environment"
             ;;
 
         services)
-            printf '%s\n' "Service configuration"
+            printf '%s\n' "Configure system services"
             ;;
 
         bootloader)
-            printf '%s\n' "Bootloader installation"
+            printf '%s\n' "Install bootloader"
             ;;
 
         summary)
@@ -175,52 +206,31 @@ installer_get_stage_title()
             ;;
 
         *)
+            installer_log_error \
+                "Unknown installer stage: ${stage}"
+
             return 1
             ;;
     esac
-
-    return 0
 }
 
-#============================================================
-# STAGE -> REAL FUNCTION MAPPING
-#
-# Реальные функции текущих модулей:
-#
-# keyboard.sh          -> keyboard()
-# locale.sh            -> locale()
-# locale_generate.sh   -> locale_generate()
-# network.sh           -> network()
-# mirrors.sh           -> mirrors()
-# disks.sh             -> disks()
-# partition.sh         -> partition()
-# filesystem.sh        -> filesystem()
-# mount.sh             -> mount_filesystems()
-# packages.sh          -> packages_install()
-# users.sh             -> users()
-# desktop.sh           -> desktop_install()
-# services.sh          -> services_configure()
-# bootloader.sh        -> bootloader_install()
-# summary.sh           -> summary()
-#
-#============================================================
+
+# ============================================================
+# Получить функцию этапа
+# ============================================================
 
 installer_get_stage_function()
 {
     local stage="${1:-}"
 
-    case "$stage"
-    in
+    case "$stage" in
+
         keyboard)
             printf '%s\n' "keyboard"
             ;;
 
         locale)
             printf '%s\n' "locale"
-            ;;
-
-        locale_generate)
-            printf '%s\n' "locale_generate"
             ;;
 
         network)
@@ -251,6 +261,10 @@ installer_get_stage_function()
             printf '%s\n' "packages_install"
             ;;
 
+        locale_generate)
+            printf '%s\n' "locale_generate"
+            ;;
+
         users)
             printf '%s\n' "users"
             ;;
@@ -272,16 +286,18 @@ installer_get_stage_function()
             ;;
 
         *)
+            installer_log_error \
+                "Unknown installer stage: ${stage}"
+
             return 1
             ;;
     esac
-
-    return 0
 }
 
-#============================================================
-# CHECK ONE STAGE
-#============================================================
+
+# ============================================================
+# Проверка существования этапа
+# ============================================================
 
 installer_check_stage()
 {
@@ -296,12 +312,10 @@ installer_check_stage()
         return 1
     fi
 
-    if ! function_name="$(
-        installer_get_stage_function "$stage"
-    )"
+    if ! function_name="$(installer_get_stage_function "$stage")"
     then
         installer_log_error \
-            "Unknown installation stage: ${stage}"
+            "Cannot resolve function for stage: ${stage}"
 
         return 1
     fi
@@ -309,93 +323,59 @@ installer_check_stage()
     if ! declare -F "$function_name" >/dev/null 2>&1
     then
         installer_log_error \
-            "Stage function NOT loaded: ${stage} -> ${function_name}()"
+            "Stage function not found: ${function_name}"
 
         return 1
     fi
 
-    installer_log_info \
-        "Stage available: ${stage} -> ${function_name}()"
-
     return 0
 }
 
-#============================================================
-# CHECK ALL STAGES
-#============================================================
+
+# ============================================================
+# Проверка всех этапов
+# ============================================================
 
 installer_check_all_stages()
 {
     local stage=""
     local function_name=""
-    local missing=0
 
     installer_log_info \
-        "============================================================"
-
-    installer_log_info \
-        "Checking installation stages"
-
-    installer_log_info \
-        "============================================================"
+        "Checking installer stage API"
 
     for stage in "${INSTALLER_STAGES[@]}"
     do
-        if ! function_name="$(
-            installer_get_stage_function "$stage"
-        )"
+        if ! function_name="$(installer_get_stage_function "$stage")"
         then
             installer_log_error \
-                "Cannot resolve stage function: ${stage}"
+                "Failed to resolve stage: ${stage}"
 
-            missing=1
-            continue
+            return 1
+        fi
+
+        if ! declare -F "$function_name" >/dev/null 2>&1
+        then
+            installer_log_error \
+                "Missing stage function: ${function_name} (${stage})"
+
+            return 1
         fi
 
         installer_log_info \
-            "Checking: ${stage} -> ${function_name}()"
-
-        if declare -F "$function_name" >/dev/null 2>&1
-        then
-            installer_log_info \
-                "  OK: ${function_name}()"
-        else
-            installer_log_error \
-                "  MISSING: ${function_name}()"
-
-            missing=1
-        fi
+            "Stage available: ${stage} -> ${function_name}"
     done
 
-    if (( missing != 0 ))
-    then
-        installer_log_error \
-            "============================================================"
-
-        installer_log_error \
-            "One or more installation stages are missing."
-
-        installer_log_error \
-            "============================================================"
-
-        return 1
-    fi
-
     installer_log_info \
-        "============================================================"
-
-    installer_log_info \
-        "All installation stages are available."
-
-    installer_log_info \
-        "============================================================"
+        "All installer stages are available"
 
     return 0
 }
 
-#============================================================
-# RUN ONE STAGE
-#============================================================
+
+# ============================================================
+# Выполнить один этап
+# ============================================================
 
 installer_run_stage()
 {
@@ -412,57 +392,38 @@ installer_run_stage()
         return 1
     fi
 
-    if ! function_name="$(
-        installer_get_stage_function "$stage"
-    )"
-    then
-        installer_log_error \
-            "Unknown installation stage: ${stage}"
+    installer_log_info \
+        "----------------------------------------"
 
-        return 1
-    fi
+    installer_log_info \
+        "Starting stage: ${stage}"
 
-    if ! title="$(
-        installer_get_stage_title "$stage"
-    )"
+    if ! title="$(installer_get_stage_title "$stage")"
     then
         title="$stage"
     fi
 
-    if ! declare -F "$function_name" >/dev/null 2>&1
+    installer_log_info \
+        "Stage title: ${title}"
+
+    if ! function_name="$(installer_get_stage_function "$stage")"
     then
         installer_log_error \
-            "Stage function not loaded: ${function_name}()"
+            "Cannot resolve function for stage: ${stage}"
 
-        return 127
+        return 1
     fi
 
     installer_log_info \
-        "============================================================"
+        "Stage function: ${function_name}"
 
-    installer_log_info \
-        "START STAGE"
+    if ! declare -F "$function_name" >/dev/null 2>&1
+    then
+        installer_log_error \
+            "Function not found: ${function_name}"
 
-    installer_log_info \
-        "Stage: ${stage}"
-
-    installer_log_info \
-        "Title: ${title}"
-
-    installer_log_info \
-        "Function: ${function_name}()"
-
-    installer_log_info \
-        "============================================================"
-
-    #--------------------------------------------------------
-    # Выполняем функцию внутри if.
-    #
-    # Это важно при использовании:
-    #   set -e
-    #
-    # Ошибку можно безопасно получить через $?
-    #--------------------------------------------------------
+        return 127
+    fi
 
     if "$function_name"
     then
@@ -471,123 +432,82 @@ installer_run_stage()
         rc=$?
     fi
 
-    installer_log_info \
-        "Stage function ${function_name}() returned rc=${rc}"
-
-    if (( rc != 0 ))
+    if (( rc == 0 ))
     then
+        installer_log_info \
+            "Stage completed successfully: ${stage}"
+    else
         installer_log_error \
-            "============================================================"
-
-        installer_log_error \
-            "STAGE FAILED"
-
-        installer_log_error \
-            "Stage: ${stage}"
-
-        installer_log_error \
-            "Title: ${title}"
-
-        installer_log_error \
-            "Function: ${function_name}()"
-
-        installer_log_error \
-            "Return code: ${rc}"
-
-        installer_log_error \
-            "============================================================"
-
-        return "$rc"
+            "Stage failed: ${stage}, rc=${rc}"
     fi
 
     installer_log_info \
-        "============================================================"
+        "Finished stage: ${stage}"
 
-    installer_log_info \
-        "STAGE COMPLETED"
-
-    installer_log_info \
-        "Stage: ${stage}"
-
-    installer_log_info \
-        "============================================================"
-
-    return 0
+    return "$rc"
 }
 
-#============================================================
-# FULL INSTALLATION
-#============================================================
+
+# ============================================================
+# Полная установка
+# ============================================================
 
 installer_full_install()
 {
     local stage=""
-    local index=0
-    local total="${#INSTALLER_STAGES[@]}"
     local title=""
     local rc=0
+    local index=0
+    local total="${#INSTALLER_STAGES[@]}"
 
     installer_log_info \
-        "############################################################"
+        "========================================"
 
     installer_log_info \
-        "# FULL INSTALLATION STARTED"
+        "FULL INSTALLATION STARTED"
 
     installer_log_info \
-        "# TOTAL STAGES: ${total}"
+        "Total stages: ${total}"
 
     installer_log_info \
-        "############################################################"
+        "========================================"
 
-    #--------------------------------------------------------
-    # Проверяем API всех этапов до начала установки.
-    #--------------------------------------------------------
-
-    installer_log_info \
-        "FULL INSTALL: validating stage functions"
+    # --------------------------------------------------------
+    # Проверка всех функций перед началом установки.
+    # --------------------------------------------------------
 
     if ! installer_check_all_stages
     then
         installer_log_error \
-            "FULL INSTALLATION ABORTED"
-
-        installer_log_error \
-            "Reason: one or more stage functions are missing."
+            "Installer stage API check failed"
 
         return 1
     fi
 
-    #--------------------------------------------------------
-    # Запуск всех этапов
-    #--------------------------------------------------------
+    # --------------------------------------------------------
+    # Выполнение этапов по порядку.
+    # --------------------------------------------------------
 
     for stage in "${INSTALLER_STAGES[@]}"
     do
-        index=$((index + 1))
+        (( index++ ))
 
-        if ! title="$(
-            installer_get_stage_title "$stage"
-        )"
+        if ! title="$(installer_get_stage_title "$stage")"
         then
             title="$stage"
         fi
 
-        installer_log_info ""
+        installer_log_info \
+            "========================================"
 
         installer_log_info \
-            "############################################################"
+            "STAGE ${index}/${total}: ${title}"
 
         installer_log_info \
-            "FULL INSTALL PROGRESS: ${index}/${total}"
+            "Stage ID: ${stage}"
 
         installer_log_info \
-            "STAGE: ${stage}"
-
-        installer_log_info \
-            "TITLE: ${title}"
-
-        installer_log_info \
-            "############################################################"
+            "========================================"
 
         if installer_run_stage "$stage"
         then
@@ -596,295 +516,162 @@ installer_full_install()
             rc=$?
         fi
 
-        installer_log_info \
-            "FULL INSTALL: stage=${stage} rc=${rc}"
-
         if (( rc != 0 ))
         then
             installer_log_error \
-                "############################################################"
+                "FULL INSTALLATION STOPPED"
 
             installer_log_error \
-                "FULL INSTALLATION FAILED"
+                "Failed stage: ${stage}"
 
             installer_log_error \
-                "FAILED STAGE: ${stage}"
-
-            installer_log_error \
-                "FAILED TITLE: ${title}"
-
-            installer_log_error \
-                "FAILED STEP: ${index}/${total}"
-
-            installer_log_error \
-                "RETURN CODE: ${rc}"
-
-            installer_log_error \
-                "############################################################"
+                "Return code: ${rc}"
 
             return "$rc"
         fi
 
         installer_log_info \
-            "FULL INSTALL: stage ${index}/${total} completed"
+            "Stage ${index}/${total} completed successfully"
     done
 
-    installer_log_info ""
+    installer_log_info \
+        "========================================"
 
     installer_log_info \
-        "############################################################"
+        "FULL INSTALLATION COMPLETED SUCCESSFULLY"
 
     installer_log_info \
-        "# FULL INSTALLATION COMPLETED SUCCESSFULLY"
-
-    installer_log_info \
-        "# STAGES COMPLETED: ${total}/${total}"
-
-    installer_log_info \
-        "############################################################"
+        "========================================"
 
     return 0
 }
 
-#============================================================
-# GENERIC RUNNER
-#============================================================
+
+# ============================================================
+# Запуск одного этапа через API
+# ============================================================
 
 installer_run()
 {
-    local mode="${1:-menu}"
-    local stage="${2:-}"
-    local rc=0
+    local action="${1:-}"
+    shift || true
 
-    installer_log_info \
-        "installer_run()"
+    case "$action" in
 
-    installer_log_info \
-        "Mode: ${mode}"
-
-    case "$mode"
-    in
         full|full_install|install)
-
-            installer_log_info \
-                "installer_run: full installation requested"
-
-            if installer_full_install
-            then
-                return 0
-            fi
-
-            rc=$?
-
-            return "$rc"
+            installer_full_install "$@"
             ;;
 
         stage)
-
-            if [[ -z "$stage" ]]
+            if [[ $# -lt 1 ]]
             then
                 installer_log_error \
-                    "installer_run: stage name is required"
+                    "installer_run stage: stage name required"
 
                 return 1
             fi
 
-            installer_log_info \
-                "installer_run: stage requested: ${stage}"
-
-            if installer_run_stage "$stage"
-            then
-                return 0
-            fi
-
-            rc=$?
-
-            return "$rc"
+            installer_run_stage "$1"
             ;;
 
         menu)
-
-            installer_log_info \
-                "installer_run: starting main menu"
-
-            if ! declare -F menu_main >/dev/null 2>&1
-            then
-                installer_log_error \
-                    "installer_run: menu_main() is not loaded"
-
-                return 127
-            fi
-
-            if menu_main
-            then
-                return 0
-            fi
-
-            rc=$?
-
-            installer_log_error \
-                "installer_run: menu_main() returned rc=${rc}"
-
-            return "$rc"
+            installer_start_menu "$@"
             ;;
 
         *)
-
             installer_log_error \
-                "installer_run: unknown mode: ${mode}"
+                "Unknown installer action: ${action}"
 
-            return 2
+            return 1
             ;;
     esac
 }
 
-#============================================================
-# START MENU
-#============================================================
+
+# ============================================================
+# Запуск главного меню
+# ============================================================
 
 installer_start_menu()
 {
-    local rc=0
-
-    installer_log_info \
-        "installer_start_menu()"
-
-    if ! declare -F menu_main >/dev/null 2>&1
+    if declare -F menu_main >/dev/null 2>&1
     then
-        installer_log_error \
-            "installer_start_menu: menu_main() is not loaded"
-
-        return 127
+        menu_main
+        return $?
     fi
 
-    installer_log_info \
-        "installer_start_menu: calling menu_main()"
+    installer_log_error \
+        "menu_main() is not available"
 
-    if menu_main
-    then
-        rc=0
-    else
-        rc=$?
-    fi
-
-    installer_log_info \
-        "installer_start_menu: menu_main() returned rc=${rc}"
-
-    return "$rc"
+    return 127
 }
 
-#============================================================
-# MAIN CONTROLLER ENTRY
-#============================================================
+
+# ============================================================
+# Главный entry point
+# ============================================================
 
 installer_main()
 {
-    local mode="${1:-menu}"
-    local rc=0
-
-    installer_log_info \
-        "============================================================"
-
-    installer_log_info \
-        "Arch Installer controller started"
-
-    installer_log_info \
-        "Mode: ${mode}"
-
-    installer_log_info \
-        "============================================================"
-
-    case "$mode"
-    in
-        menu)
-
-            installer_log_info \
-                "Controller: entering menu mode"
-
-            if installer_start_menu
-            then
-                rc=0
-            else
-                rc=$?
-            fi
-
-            ;;
-
-        full|full_install|install)
-
-            installer_log_info \
-                "Controller: entering full installation mode"
-
-            if installer_full_install
-            then
-                rc=0
-            else
-                rc=$?
-            fi
-
-            ;;
-
-        stage)
-
-            if [[ -z "${2:-}" ]]
-            then
-                installer_log_error \
-                    "Controller: stage name is required"
-
-                rc=1
-            elif installer_run_stage "$2"
-            then
-                rc=0
-            else
-                rc=$?
-            fi
-
-            ;;
-
-        *)
-
-            installer_log_error \
-                "Unknown installer mode: ${mode}"
-
-            rc=2
-            ;;
-    esac
-
-    installer_log_info \
-        "============================================================"
-
-    installer_log_info \
-        "Arch Installer controller finished"
-
-    installer_log_info \
-        "Return code: ${rc}"
-
-    installer_log_info \
-        "============================================================"
-
-    return "$rc"
+    installer_start_menu "$@"
 }
 
-#============================================================
-# COMPATIBILITY ALIASES
-#============================================================
 
-run_full_installation()
+# ============================================================
+# Совместимые alias
+# ============================================================
+
+installer_install()
 {
     installer_full_install "$@"
 }
 
-run_installation_stage()
+
+installer_full()
+{
+    installer_full_install "$@"
+}
+
+
+installer_stage()
 {
     installer_run_stage "$@"
 }
+# ============================================================
+# Проверка API при загрузке
+# ============================================================
+installer_api_check()
+{
+    local required_function=""
 
-#============================================================
-# DIRECT EXECUTION
-#============================================================
+    for required_function in \
+        installer_run \
+        installer_full_install \
+        installer_run_stage \
+        installer_check_stage \
+        installer_check_all_stages \
+        installer_get_stage_function \
+        installer_get_stage_title \
+        installer_start_menu \
+        installer_main
+    do
+        if ! declare -F "$required_function" >/dev/null 2>&1
+        then
+            installer_log_error \
+                "Installer API function missing: ${required_function}"
+
+            return 1
+        fi
+    done
+
+    return 0
+}
+# ============================================================
+# Прямой запуск
+# ============================================================
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]
 then
     installer_main "$@"
-    exit $?
 fi
+

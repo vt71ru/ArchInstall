@@ -1,3 +1,4 @@
+```bash
 #!/usr/bin/env bash
 #
 #============================================================
@@ -31,7 +32,6 @@ then
 fi
 
 ARCH_INSTALLER_COLORS_SH_LOADED=1
-export ARCH_INSTALLER_COLORS_SH_LOADED
 
 #============================================================
 # Color state
@@ -96,16 +96,23 @@ colors_init()
 colors_enable()
 {
     COLORS_ENABLED=1
+    return 0
 }
 
 colors_disable()
 {
     COLORS_ENABLED=0
+    return 0
 }
 
 colors_enabled()
 {
-    (( COLORS_ENABLED != 0 ))
+    if (( COLORS_ENABLED != 0 ))
+    then
+        return 0
+    fi
+
+    return 1
 }
 
 #============================================================
@@ -131,6 +138,8 @@ color_print()
     else
         printf '%s' "$text"
     fi
+
+    return 0
 }
 
 color_println()
@@ -143,6 +152,8 @@ color_println()
         "$text"
 
     printf '\n'
+
+    return 0
 }
 
 #============================================================
@@ -216,6 +227,8 @@ color_prefix_info()
         '[INFO]'
 
     printf ' '
+
+    return 0
 }
 
 color_prefix_success()
@@ -225,6 +238,8 @@ color_prefix_success()
         '[ OK ]'
 
     printf ' '
+
+    return 0
 }
 
 color_prefix_warning()
@@ -234,6 +249,8 @@ color_prefix_warning()
         '[WARN]'
 
     printf ' '
+
+    return 0
 }
 
 color_prefix_error()
@@ -243,6 +260,8 @@ color_prefix_error()
         '[ERROR]'
 
     printf ' '
+
+    return 0
 }
 
 #============================================================
@@ -268,6 +287,8 @@ color_header()
         '=========================================='
 
     printf '\n'
+
+    return 0
 }
 
 #============================================================
@@ -297,6 +318,8 @@ color_stage_header()
     color_println \
         "$COLOR_BRIGHT_BLACK" \
         '------------------------------------------'
+
+    return 0
 }
 
 #============================================================
@@ -319,6 +342,8 @@ color_menu_item()
         "$text"
 
     printf '\n'
+
+    return 0
 }
 
 #============================================================
@@ -327,7 +352,8 @@ color_menu_item()
 
 colors_test()
 {
-    color_header 'Arch Installer - Color Test'
+    color_header \
+        'Arch Installer - Color Test'
 
     color_success \
         '[ OK ] Success'
@@ -352,4 +378,6 @@ colors_test()
 
     color_dim \
         'Secondary information'
+
+    return 0
 }

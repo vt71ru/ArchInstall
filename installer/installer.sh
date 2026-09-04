@@ -1,20 +1,20 @@
-#!/usr/bin/env bash
+!/usr/bin/env bash
 #
 #============================================================
-#  Arch Installer
+# Arch Installer
 #------------------------------------------------------------
-#  installer/installer.sh
+# installer/installer.sh
 #
-#  Центральный controller установки.
+# Центральный controller установки.
 #
-#  Ответственность:
+# Ответственность:
 #   • запуск отдельных этапов
 #   • запуск полной установки
 #   • проверка наличия stage-функций
 #   • контроль порядка выполнения
 #   • возврат кодов ошибок
 #
-#  Не содержит:
+# Не содержит:
 #   • TUI
 #   • отрисовку меню
 #   • низкоуровневую работу с терминалом
@@ -112,7 +112,8 @@ installer_get_stage_title()
 {
     local stage="${1:-}"
 
-    case "$stage" in
+    case "$stage"
+    in
         keyboard)
             printf '%s\n' "Keyboard configuration"
             ;;
@@ -184,23 +185,32 @@ installer_get_stage_title()
 #============================================================
 # STAGE -> REAL FUNCTION MAPPING
 #
-# These names must match the real functions exported by
-# installer/*.sh modules.
+# Реальные функции текущих модулей:
 #
-# IMPORTANT:
+# keyboard.sh          -> keyboard()
+# locale.sh            -> locale()
+# locale_generate.sh   -> locale_generate()
+# network.sh           -> network()
+# mirrors.sh           -> mirrors()
+# disks.sh             -> disks()
+# partition.sh         -> partition()
+# filesystem.sh        -> filesystem()
+# mount.sh             -> mount_filesystems()
+# packages.sh          -> packages_install()
+# users.sh             -> users()
+# desktop.sh           -> desktop_install()
+# services.sh          -> services_configure()
+# bootloader.sh        -> bootloader_install()
+# summary.sh           -> summary()
 #
-# mount -> mount_filesystems
-#
-# because a function named mount() conflicts with the
-# system mount command.
 #============================================================
 
 installer_get_stage_function()
 {
     local stage="${1:-}"
 
-    case "$stage" in
-
+    case "$stage"
+    in
         keyboard)
             printf '%s\n' "keyboard"
             ;;
@@ -242,7 +252,7 @@ installer_get_stage_function()
             ;;
 
         users)
-            printf '%s\n' "users_configure"
+            printf '%s\n' "users"
             ;;
 
         desktop)
@@ -446,11 +456,12 @@ installer_run_stage()
         "============================================================"
 
     #--------------------------------------------------------
-    # IMPORTANT:
+    # Выполняем функцию внутри if.
     #
-    # Function call is inside an if statement.
-    # This prevents set -e from terminating the controller
-    # before we capture the actual return code.
+    # Это важно при использовании:
+    #   set -e
+    #
+    # Ошибку можно безопасно получить через $?
     #--------------------------------------------------------
 
     if "$function_name"
@@ -529,7 +540,7 @@ installer_full_install()
         "############################################################"
 
     #--------------------------------------------------------
-    # Validate every stage before doing destructive work.
+    # Проверяем API всех этапов до начала установки.
     #--------------------------------------------------------
 
     installer_log_info \
@@ -541,13 +552,13 @@ installer_full_install()
             "FULL INSTALLATION ABORTED"
 
         installer_log_error \
-            "Reason: one or more required stage functions are missing."
+            "Reason: one or more stage functions are missing."
 
         return 1
     fi
 
     #--------------------------------------------------------
-    # Execute all stages sequentially.
+    # Запуск всех этапов
     #--------------------------------------------------------
 
     for stage in "${INSTALLER_STAGES[@]}"
@@ -653,7 +664,6 @@ installer_run()
 
     case "$mode"
     in
-
         full|full_install|install)
 
             installer_log_info \
@@ -734,6 +744,8 @@ installer_run()
 
 installer_start_menu()
 {
+    local rc=0
+
     installer_log_info \
         "installer_start_menu()"
 
@@ -750,15 +762,12 @@ installer_start_menu()
 
     if menu_main
     then
-        installer_log_info \
-            "installer_start_menu: menu_main() returned rc=0"
-
-        return 0
+        rc=0
+    else
+        rc=$?
     fi
 
-    local rc=$?
-
-    installer_log_error \
+    installer_log_info \
         "installer_start_menu: menu_main() returned rc=${rc}"
 
     return "$rc"
@@ -787,7 +796,6 @@ installer_main()
 
     case "$mode"
     in
-
         menu)
 
             installer_log_info \
@@ -863,17 +871,11 @@ installer_main()
 
 run_full_installation()
 {
-    installer_log_info \
-        "Compatibility alias: run_full_installation()"
-
     installer_full_install "$@"
 }
 
 run_installation_stage()
 {
-    installer_log_info \
-        "Compatibility alias: run_installation_stage()"
-
     installer_run_stage "$@"
 }
 
@@ -886,4 +888,3 @@ then
     installer_main "$@"
     exit $?
 fi
-

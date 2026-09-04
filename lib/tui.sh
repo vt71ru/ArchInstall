@@ -1180,9 +1180,17 @@ event_read()
 
     tui_require_tty || return 1
 
+    #--------------------------------------------------------
+    # Read one key.
     #
-    # Read exactly one byte.
+    # IMPORTANT:
     #
+    # With bash `read -n 1`, pressing Enter can produce an
+    # empty value because newline is treated as delimiter.
+    #
+    # Therefore empty "$key" MUST be interpreted as ENTER.
+    #--------------------------------------------------------
+
     if ! IFS= read \
         -r \
         -s \
@@ -1192,16 +1200,32 @@ event_read()
         return 1
     fi
 
-    case "$key" in
+    case "$key"
+    in
+
+        #----------------------------------------------------
+        # ENTER
+        #
+        # Bash read -n 1 may return an empty key for newline.
+        #----------------------------------------------------
+
+        "")
+            TUI_EVENT="$EVENT_SELECT"
+            ;;
+
+        #----------------------------------------------------
+        # ESC
+        #----------------------------------------------------
 
         $'\e')
             #
-            # ESC is ambiguous:
+            # ESC can be:
             #
-            # ESC alone      -> BACK
-            # ESC [ ...      -> CSI
-            # ESC O ...      -> SS3
+            #   ESC
+            #   ESC [ ...
+            #   ESC O ...
             #
+
             if IFS= read \
                 -r \
                 -s \
@@ -1209,7 +1233,8 @@ event_read()
                 -t "$TUI_ESCAPE_TIMEOUT" \
                 next <&"$TUI_FD"
             then
-                case "$next" in
+                case "$next"
+                in
 
                     "[")
                         event_read_csi
@@ -1223,7 +1248,8 @@ event_read()
                             -t "$TUI_ESCAPE_TIMEOUT" \
                             next <&"$TUI_FD"
                         then
-                            case "$next" in
+                            case "$next"
+                            in
                                 A)
                                     TUI_EVENT="$EVENT_UP"
                                     ;;
@@ -1274,35 +1300,50 @@ event_read()
                         ;;
 
                     *)
-                        #
-                        # ESC + ordinary character.
-                        #
                         TUI_EVENT="$EVENT_NONE"
                         ;;
                 esac
             else
-                #
-                # Standalone ESC.
-                #
+                # Standalone ESC = Back
                 TUI_EVENT="$EVENT_BACK"
             fi
             ;;
+
+        #----------------------------------------------------
+        # ENTER / NEWLINE
+        #----------------------------------------------------
 
         $'\n'|$'\r')
             TUI_EVENT="$EVENT_SELECT"
             ;;
 
+        #----------------------------------------------------
+        # SPACE
+        #----------------------------------------------------
+
         " ")
             TUI_EVENT="$EVENT_SPACE"
             ;;
+
+        #----------------------------------------------------
+        # TAB
+        #----------------------------------------------------
 
         $'\t')
             TUI_EVENT="$EVENT_TAB"
             ;;
 
+        #----------------------------------------------------
+        # BACKSPACE
+        #----------------------------------------------------
+
         $'\177'|$'\b')
             TUI_EVENT="$EVENT_DELETE"
             ;;
+
+        #----------------------------------------------------
+        # ORDINARY CHARACTER
+        #----------------------------------------------------
 
         *)
             TUI_EVENT="$EVENT_CHAR"
@@ -1312,7 +1353,6 @@ event_read()
 
     return 0
 }
-
 tui_input()
 {
     event_read

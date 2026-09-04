@@ -14,6 +14,7 @@
 #
 #  Ответственность:
 #   • Проверка конфигурации
+#   • Проверка target system
 #   • Установка GRUB в target system
 #   • Установка efibootmgr для UEFI
 #   • Установка BIOS/GPT GRUB
@@ -53,11 +54,29 @@ bootloader_load_config()
     local efi_part
     local bios_part
 
-    boot_mode="$(config_get BOOT_MODE)"
-    partition_table="$(config_get PARTITION_TABLE)"
-    target_disk="$(config_get TARGET_DISK)"
-    efi_part="$(config_get EFI_PART)"
-    bios_part="$(config_get BIOS_PART)"
+    boot_mode="$(
+        config_get BOOT_MODE
+    )"
+
+    partition_table="$(
+        config_get PARTITION_TABLE
+    )"
+
+    target_disk="$(
+        config_get TARGET_DISK
+    )"
+
+    efi_part="$(
+        config_get EFI_PART
+    )"
+
+    bios_part="$(
+        config_get BIOS_PART
+    )"
+
+    #--------------------------------------------------------
+    # Validate boot mode
+    #--------------------------------------------------------
 
     case "$boot_mode" in
         UEFI|BIOS)
@@ -70,6 +89,10 @@ bootloader_load_config()
             ;;
     esac
 
+    #--------------------------------------------------------
+    # Validate partition table
+    #--------------------------------------------------------
+
     case "$partition_table" in
         GPT|MBR)
             ;;
@@ -80,6 +103,10 @@ bootloader_load_config()
             return 1
             ;;
     esac
+
+    #--------------------------------------------------------
+    # Validate target disk
+    #--------------------------------------------------------
 
     if [[ -z "$target_disk" ]]
     then
@@ -96,6 +123,10 @@ bootloader_load_config()
 
         return 1
     fi
+
+    #--------------------------------------------------------
+    # Validate UEFI configuration
+    #--------------------------------------------------------
 
     if [[ "$boot_mode" == "UEFI" ]]
     then
@@ -123,6 +154,10 @@ bootloader_load_config()
             return 1
         fi
     fi
+
+    #--------------------------------------------------------
+    # Validate BIOS + GPT configuration
+    #--------------------------------------------------------
 
     if [[ "$boot_mode" == "BIOS" &&
           "$partition_table" == "GPT" ]]
@@ -158,6 +193,8 @@ bootloader_load_config()
 
     logger_info \
         "BIOS boot partition: ${bios_part:-none}"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -174,7 +211,7 @@ bootloader_check_target()
         return 1
     fi
 
-    if ! mountpoint -q /mnt
+    if ! /usr/bin/mountpoint -q /mnt
     then
         dialog_error \
             "/mnt is not mounted"
@@ -192,6 +229,8 @@ bootloader_check_target()
 
     logger_info \
         "Target system check passed"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -202,7 +241,9 @@ bootloader_check_uefi_environment()
 {
     local boot_mode
 
-    boot_mode="$(config_get BOOT_MODE)"
+    boot_mode="$(
+        config_get BOOT_MODE
+    )"
 
     if [[ "$boot_mode" != "UEFI" ]]
     then
@@ -227,6 +268,8 @@ bootloader_check_uefi_environment()
 
     logger_info \
         "UEFI firmware environment detected"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -255,6 +298,8 @@ bootloader_check_host_tools()
             return 1
         fi
     done
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -265,12 +310,15 @@ bootloader_install_packages()
 {
     local boot_mode
 
-    boot_mode="$(config_get BOOT_MODE)"
+    boot_mode="$(
+        config_get BOOT_MODE
+    )"
 
     logger_info \
         "Installing bootloader packages into target"
 
     case "$boot_mode" in
+
         UEFI)
             pacstrap \
                 -K \
@@ -284,6 +332,7 @@ bootloader_install_packages()
                     return 1
                 }
             ;;
+
         BIOS)
             pacstrap \
                 -K \
@@ -296,6 +345,7 @@ bootloader_install_packages()
                     return 1
                 }
             ;;
+
         *)
             dialog_error \
                 "Unsupported boot mode: ${boot_mode}"
@@ -306,6 +356,8 @@ bootloader_install_packages()
 
     logger_info \
         "Bootloader packages installed"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -316,7 +368,7 @@ bootloader_check_target_tools()
 {
     if ! arch-chroot \
         /mnt \
-        command -v grub-install \
+        /usr/bin/sh -c 'command -v grub-install' \
         >/dev/null 2>&1
     then
         dialog_error \
@@ -327,7 +379,7 @@ bootloader_check_target_tools()
 
     if ! arch-chroot \
         /mnt \
-        command -v grub-mkconfig \
+        /usr/bin/sh -c 'command -v grub-mkconfig' \
         >/dev/null 2>&1
     then
         dialog_error \
@@ -335,6 +387,8 @@ bootloader_check_target_tools()
 
         return 1
     fi
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -346,16 +400,28 @@ bootloader_check_efi_mount()
     local boot_mode
     local efi_part
 
-    boot_mode="$(config_get BOOT_MODE)"
+    boot_mode="$(
+        config_get BOOT_MODE
+    )"
 
     if [[ "$boot_mode" != "UEFI" ]]
     then
         return 0
     fi
 
-    efi_part="$(config_get EFI_PART)"
+    efi_part="$(
+        config_get EFI_PART
+    )"
 
-    if ! mountpoint -q /mnt/boot/efi
+    if [[ -z "$efi_part" ]]
+    then
+        dialog_error \
+            "EFI partition is not configured"
+
+        return 1
+    fi
+
+    if ! /usr/bin/mountpoint -q /mnt/boot/efi
     then
         dialog_error \
             "/mnt/boot/efi is not mounted"
@@ -363,7 +429,7 @@ bootloader_check_efi_mount()
         return 1
     fi
 
-    if ! findmnt \
+    if ! /usr/bin/findmnt \
         -rn \
         -S "$efi_part" \
         -T /mnt/boot/efi \
@@ -377,6 +443,8 @@ bootloader_check_efi_mount()
 
     logger_info \
         "EFI mount check passed"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -390,8 +458,13 @@ bootloader_check_bios_partition()
     local bios_part
     local part_type
 
-    boot_mode="$(config_get BOOT_MODE)"
-    partition_table="$(config_get PARTITION_TABLE)"
+    boot_mode="$(
+        config_get BOOT_MODE
+    )"
+
+    partition_table="$(
+        config_get PARTITION_TABLE
+    )"
 
     if [[ "$boot_mode" != "BIOS" ||
           "$partition_table" != "GPT" ]]
@@ -399,10 +472,28 @@ bootloader_check_bios_partition()
         return 0
     fi
 
-    bios_part="$(config_get BIOS_PART)"
+    bios_part="$(
+        config_get BIOS_PART
+    )"
+
+    if [[ -z "$bios_part" ]]
+    then
+        dialog_error \
+            "BIOS boot partition is not configured"
+
+        return 1
+    fi
+
+    if [[ ! -b "$bios_part" ]]
+    then
+        dialog_error \
+            "BIOS boot partition does not exist: ${bios_part}"
+
+        return 1
+    fi
 
     part_type="$(
-        blkid \
+        /usr/bin/blkid \
             -s PARTTYPE \
             -o value \
             "$bios_part" \
@@ -420,6 +511,8 @@ bootloader_check_bios_partition()
 
     logger_info \
         "BIOS/GPT boot partition check passed"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -447,6 +540,8 @@ bootloader_install_uefi()
 
     logger_info \
         "UEFI GRUB installed successfully"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -457,7 +552,9 @@ bootloader_install_bios()
 {
     local target_disk
 
-    target_disk="$(config_get TARGET_DISK)"
+    target_disk="$(
+        config_get TARGET_DISK
+    )"
 
     logger_info \
         "Installing GRUB for BIOS: ${target_disk}"
@@ -477,6 +574,8 @@ bootloader_install_bios()
 
     logger_info \
         "BIOS GRUB installed successfully"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -487,6 +586,15 @@ bootloader_generate_config()
 {
     logger_info \
         "Generating GRUB configuration"
+
+    mkdir -p \
+        "/mnt${BOOTLOADER_GRUB_DIR}" \
+        || {
+            logger_error \
+                "Failed to create GRUB directory"
+
+            return 1
+        }
 
     arch-chroot \
         /mnt \
@@ -501,6 +609,8 @@ bootloader_generate_config()
 
     logger_info \
         "GRUB configuration generated"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -509,10 +619,6 @@ bootloader_generate_config()
 
 bootloader_check_files()
 {
-    local boot_mode
-
-    boot_mode="$(config_get BOOT_MODE)"
-
     if [[ ! -d "/mnt${BOOTLOADER_GRUB_DIR}" ]]
     then
         dialog_error \
@@ -529,19 +635,10 @@ bootloader_check_files()
         return 1
     fi
 
-    if [[ "$boot_mode" == "UEFI" ]]
-    then
-        if [[ ! -f "/mnt/boot/efi/EFI/${BOOTLOADER_ID}/grubx64.efi" ]]
-        then
-            dialog_error \
-                "UEFI GRUB binary was not installed"
-
-            return 1
-        fi
-    fi
-
     logger_info \
         "GRUB file validation passed"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -553,28 +650,37 @@ bootloader_check_installation()
     local boot_mode
     local partition_table
 
-    boot_mode="$(config_get BOOT_MODE)"
-    partition_table="$(config_get PARTITION_TABLE)"
+    boot_mode="$(
+        config_get BOOT_MODE
+    )"
+
+    partition_table="$(
+        config_get PARTITION_TABLE
+    )"
 
     bootloader_check_files || \
         return 1
 
     case "$boot_mode:$partition_table" in
+
         UEFI:GPT)
             logger_info \
                 "Validated installation mode: UEFI/GPT"
             ;;
+
         BIOS:GPT)
             logger_info \
                 "Validated installation mode: BIOS/GPT"
             ;;
+
         BIOS:MBR)
             logger_info \
                 "Validated installation mode: BIOS/MBR"
             ;;
+
         *)
             dialog_error \
-                "Unsupported bootloader configuration"
+                "Unsupported bootloader configuration: ${boot_mode}/${partition_table}"
 
             return 1
             ;;
@@ -591,19 +697,38 @@ bootloader_save()
 {
     config_set \
         BOOTLOADER \
-        "grub"
+        "grub" || {
+            logger_error \
+                "Failed to save bootloader state"
 
-    config_save
+            return 1
+        }
+
+    config_save || {
+        logger_error \
+            "Failed to save configuration"
+
+        return 1
+    }
 
     logger_info \
         "Bootloader state saved"
+
+    return 0
 }
 
 #------------------------------------------------------------
-# Main
+# Main installer stage
+#
+# IMPORTANT:
+# installer/installer.sh must call:
+#
+#     bootloader_install
+#
+# Do NOT rename this back to bootloader().
 #------------------------------------------------------------
 
-bootloader()
+bootloader_install()
 {
     local boot_mode
     local partition_table
@@ -635,18 +760,26 @@ bootloader()
     bootloader_check_target_tools || \
         return 1
 
-    boot_mode="$(config_get BOOT_MODE)"
-    partition_table="$(config_get PARTITION_TABLE)"
+    boot_mode="$(
+        config_get BOOT_MODE
+    )"
+
+    partition_table="$(
+        config_get PARTITION_TABLE
+    )"
 
     case "$boot_mode:$partition_table" in
+
         UEFI:GPT)
             bootloader_install_uefi || \
                 return 1
             ;;
+
         BIOS:GPT|BIOS:MBR)
             bootloader_install_bios || \
                 return 1
             ;;
+
         *)
             dialog_error \
                 "Unsupported bootloader configuration: ${boot_mode}/${partition_table}"
@@ -670,4 +803,11 @@ bootloader()
 
     logger_info \
         "Bootloader installation finished"
+
+    return 0
 }
+
+#============================================================
+# END
+#============================================================
+

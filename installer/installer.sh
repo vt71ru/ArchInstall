@@ -10,7 +10,7 @@
 #  Ответственность:
 #   • запуск отдельных этапов
 #   • запуск полной установки
-#   • проверка этапов
+#   • проверка наличия stage-функций
 #   • контроль порядка выполнения
 #   • возврат кодов ошибок
 #
@@ -22,7 +22,7 @@
 #============================================================
 
 #============================================================
-# Load guard
+# LOAD GUARD
 #============================================================
 
 if [[ -n "${ARCH_INSTALLER_INSTALLER_SH_LOADED:-}" ]]
@@ -116,48 +116,63 @@ installer_get_stage_title()
         keyboard)
             printf '%s\n' "Keyboard configuration"
             ;;
+
         locale)
             printf '%s\n' "Locale configuration"
             ;;
+
         locale_generate)
             printf '%s\n' "Generate locales"
             ;;
+
         network)
             printf '%s\n' "Network configuration"
             ;;
+
         mirrors)
             printf '%s\n' "Mirror configuration"
             ;;
+
         disks)
             printf '%s\n' "Disk detection"
             ;;
+
         partition)
             printf '%s\n' "Disk partitioning"
             ;;
+
         filesystem)
             printf '%s\n' "Filesystem creation"
             ;;
+
         mount)
             printf '%s\n' "Mount filesystems"
             ;;
+
         packages)
             printf '%s\n' "Package installation"
             ;;
+
         users)
             printf '%s\n' "User configuration"
             ;;
+
         desktop)
-            printf '%s\n' "Desktop configuration"
+            printf '%s\n' "Desktop installation"
             ;;
+
         services)
             printf '%s\n' "Service configuration"
             ;;
+
         bootloader)
             printf '%s\n' "Bootloader installation"
             ;;
+
         summary)
             printf '%s\n' "Installation summary"
             ;;
+
         *)
             return 1
             ;;
@@ -167,13 +182,17 @@ installer_get_stage_title()
 }
 
 #============================================================
-# STAGE FUNCTION RESOLUTION
+# STAGE -> REAL FUNCTION MAPPING
+#
+# These names must match the real functions exported by
+# installer/*.sh modules.
 #
 # IMPORTANT:
+#
 # mount -> mount_filesystems
 #
-# We must NOT use a function named mount because that conflicts
-# with the system mount command.
+# because a function named mount() conflicts with the
+# system mount command.
 #============================================================
 
 installer_get_stage_function()
@@ -181,51 +200,67 @@ installer_get_stage_function()
     local stage="${1:-}"
 
     case "$stage" in
+
         keyboard)
             printf '%s\n' "keyboard"
             ;;
+
         locale)
             printf '%s\n' "locale"
             ;;
+
         locale_generate)
             printf '%s\n' "locale_generate"
             ;;
+
         network)
             printf '%s\n' "network"
             ;;
+
         mirrors)
             printf '%s\n' "mirrors"
             ;;
+
         disks)
             printf '%s\n' "disks"
             ;;
+
         partition)
             printf '%s\n' "partition"
             ;;
+
         filesystem)
             printf '%s\n' "filesystem"
             ;;
+
         mount)
             printf '%s\n' "mount_filesystems"
             ;;
+
         packages)
-            printf '%s\n' "packages"
+            printf '%s\n' "packages_install"
             ;;
+
         users)
-            printf '%s\n' "users"
+            printf '%s\n' "users_configure"
             ;;
+
         desktop)
-            printf '%s\n' "desktop"
+            printf '%s\n' "desktop_install"
             ;;
+
         services)
-            printf '%s\n' "services"
+            printf '%s\n' "services_configure"
             ;;
+
         bootloader)
-            printf '%s\n' "bootloader"
+            printf '%s\n' "bootloader_install"
             ;;
+
         summary)
             printf '%s\n' "summary"
             ;;
+
         *)
             return 1
             ;;
@@ -235,7 +270,7 @@ installer_get_stage_function()
 }
 
 #============================================================
-# CHECK STAGE
+# CHECK ONE STAGE
 #============================================================
 
 installer_check_stage()
@@ -247,6 +282,7 @@ installer_check_stage()
     then
         installer_log_error \
             "installer_check_stage: empty stage"
+
         return 1
     fi
 
@@ -255,16 +291,21 @@ installer_check_stage()
     )"
     then
         installer_log_error \
-            "Unknown installation stage: $stage"
+            "Unknown installation stage: ${stage}"
+
         return 1
     fi
 
     if ! declare -F "$function_name" >/dev/null 2>&1
     then
         installer_log_error \
-            "Stage function is not loaded: ${function_name}()"
+            "Stage function NOT loaded: ${stage} -> ${function_name}()"
+
         return 1
     fi
+
+    installer_log_info \
+        "Stage available: ${stage} -> ${function_name}()"
 
     return 0
 }
@@ -280,7 +321,13 @@ installer_check_all_stages()
     local missing=0
 
     installer_log_info \
-        "Checking installation stages..."
+        "============================================================"
+
+    installer_log_info \
+        "Checking installation stages"
+
+    installer_log_info \
+        "============================================================"
 
     for stage in "${INSTALLER_STAGES[@]}"
     do
@@ -289,18 +336,23 @@ installer_check_all_stages()
         )"
         then
             installer_log_error \
-                "Cannot resolve stage function: $stage"
+                "Cannot resolve stage function: ${stage}"
+
             missing=1
             continue
         fi
 
+        installer_log_info \
+            "Checking: ${stage} -> ${function_name}()"
+
         if declare -F "$function_name" >/dev/null 2>&1
         then
             installer_log_info \
-                "Stage available: $stage -> ${function_name}()"
+                "  OK: ${function_name}()"
         else
             installer_log_error \
-                "Stage NOT loaded: $stage -> ${function_name}()"
+                "  MISSING: ${function_name}()"
+
             missing=1
         fi
     done
@@ -308,18 +360,31 @@ installer_check_all_stages()
     if (( missing != 0 ))
     then
         installer_log_error \
+            "============================================================"
+
+        installer_log_error \
             "One or more installation stages are missing."
+
+        installer_log_error \
+            "============================================================"
+
         return 1
     fi
 
     installer_log_info \
+        "============================================================"
+
+    installer_log_info \
         "All installation stages are available."
+
+    installer_log_info \
+        "============================================================"
 
     return 0
 }
 
 #============================================================
-# RUN SINGLE STAGE
+# RUN ONE STAGE
 #============================================================
 
 installer_run_stage()
@@ -333,29 +398,18 @@ installer_run_stage()
     then
         installer_log_error \
             "installer_run_stage: empty stage"
+
         return 1
     fi
-
-    installer_log_info \
-        "Resolving stage: $stage"
 
     if ! function_name="$(
         installer_get_stage_function "$stage"
     )"
     then
         installer_log_error \
-            "Unknown installation stage: $stage"
+            "Unknown installation stage: ${stage}"
+
         return 1
-    fi
-
-    installer_log_info \
-        "Resolved function: ${function_name}()"
-
-    if ! declare -F "$function_name" >/dev/null 2>&1
-    then
-        installer_log_error \
-            "Stage function not loaded: ${function_name}()"
-        return 127
     fi
 
     if ! title="$(
@@ -365,29 +419,39 @@ installer_run_stage()
         title="$stage"
     fi
 
-    installer_log_info \
-        "============================================================"
+    if ! declare -F "$function_name" >/dev/null 2>&1
+    then
+        installer_log_error \
+            "Stage function not loaded: ${function_name}()"
 
-    installer_log_info \
-        "START STAGE: $stage"
-
-    installer_log_info \
-        "TITLE: $title"
-
-    installer_log_info \
-        "FUNCTION: ${function_name}()"
-
-    installer_log_info \
-        "Calling ${function_name}()..."
+        return 127
+    fi
 
     installer_log_info \
         "============================================================"
 
+    installer_log_info \
+        "START STAGE"
+
+    installer_log_info \
+        "Stage: ${stage}"
+
+    installer_log_info \
+        "Title: ${title}"
+
+    installer_log_info \
+        "Function: ${function_name}()"
+
+    installer_log_info \
+        "============================================================"
+
+    #--------------------------------------------------------
     # IMPORTANT:
     #
-    # The stage function is called inside an if statement.
+    # Function call is inside an if statement.
     # This prevents set -e from terminating the controller
-    # before the return code can be captured.
+    # before we capture the actual return code.
+    #--------------------------------------------------------
 
     if "$function_name"
     then
@@ -397,7 +461,7 @@ installer_run_stage()
     fi
 
     installer_log_info \
-        "Stage function ${function_name}() returned rc=$rc"
+        "Stage function ${function_name}() returned rc=${rc}"
 
     if (( rc != 0 ))
     then
@@ -405,13 +469,19 @@ installer_run_stage()
             "============================================================"
 
         installer_log_error \
-            "STAGE FAILED: $stage"
+            "STAGE FAILED"
 
         installer_log_error \
-            "FUNCTION: ${function_name}()"
+            "Stage: ${stage}"
 
         installer_log_error \
-            "RETURN CODE: $rc"
+            "Title: ${title}"
+
+        installer_log_error \
+            "Function: ${function_name}()"
+
+        installer_log_error \
+            "Return code: ${rc}"
 
         installer_log_error \
             "============================================================"
@@ -423,10 +493,10 @@ installer_run_stage()
         "============================================================"
 
     installer_log_info \
-        "STAGE COMPLETED: $stage"
+        "STAGE COMPLETED"
 
     installer_log_info \
-        "RETURN CODE: 0"
+        "Stage: ${stage}"
 
     installer_log_info \
         "============================================================"
@@ -453,17 +523,17 @@ installer_full_install()
         "# FULL INSTALLATION STARTED"
 
     installer_log_info \
-        "# TOTAL STAGES: $total"
+        "# TOTAL STAGES: ${total}"
 
     installer_log_info \
         "############################################################"
 
     #--------------------------------------------------------
-    # Verify all stages before changing anything.
+    # Validate every stage before doing destructive work.
     #--------------------------------------------------------
 
     installer_log_info \
-        "FULL INSTALL: checking all stage functions"
+        "FULL INSTALL: validating stage functions"
 
     if ! installer_check_all_stages
     then
@@ -476,11 +546,8 @@ installer_full_install()
         return 1
     fi
 
-    installer_log_info \
-        "FULL INSTALL: all stage functions are available"
-
     #--------------------------------------------------------
-    # Execute stages sequentially.
+    # Execute all stages sequentially.
     #--------------------------------------------------------
 
     for stage in "${INSTALLER_STAGES[@]}"
@@ -500,19 +567,16 @@ installer_full_install()
             "############################################################"
 
         installer_log_info \
-            "FULL INSTALL PROGRESS: $index/$total"
+            "FULL INSTALL PROGRESS: ${index}/${total}"
 
         installer_log_info \
-            "STAGE: $stage"
+            "STAGE: ${stage}"
 
         installer_log_info \
-            "TITLE: $title"
+            "TITLE: ${title}"
 
         installer_log_info \
             "############################################################"
-
-        installer_log_info \
-            "FULL INSTALL: calling installer_run_stage('$stage')"
 
         if installer_run_stage "$stage"
         then
@@ -522,7 +586,7 @@ installer_full_install()
         fi
 
         installer_log_info \
-            "FULL INSTALL: installer_run_stage('$stage') returned rc=$rc"
+            "FULL INSTALL: stage=${stage} rc=${rc}"
 
         if (( rc != 0 ))
         then
@@ -533,16 +597,16 @@ installer_full_install()
                 "FULL INSTALLATION FAILED"
 
             installer_log_error \
-                "FAILED STAGE: $stage"
+                "FAILED STAGE: ${stage}"
 
             installer_log_error \
-                "FAILED TITLE: $title"
+                "FAILED TITLE: ${title}"
 
             installer_log_error \
-                "STEP: $index/$total"
+                "FAILED STEP: ${index}/${total}"
 
             installer_log_error \
-                "RETURN CODE: $rc"
+                "RETURN CODE: ${rc}"
 
             installer_log_error \
                 "############################################################"
@@ -551,7 +615,7 @@ installer_full_install()
         fi
 
         installer_log_info \
-            "FULL INSTALL: stage $index/$total completed successfully"
+            "FULL INSTALL: stage ${index}/${total} completed"
     done
 
     installer_log_info ""
@@ -563,7 +627,7 @@ installer_full_install()
         "# FULL INSTALLATION COMPLETED SUCCESSFULLY"
 
     installer_log_info \
-        "# STAGES COMPLETED: $total/$total"
+        "# STAGES COMPLETED: ${total}/${total}"
 
     installer_log_info \
         "############################################################"
@@ -578,53 +642,58 @@ installer_full_install()
 installer_run()
 {
     local mode="${1:-menu}"
-    local stage=""
+    local stage="${2:-}"
     local rc=0
 
     installer_log_info \
         "installer_run()"
 
     installer_log_info \
-        "Mode: $mode"
+        "Mode: ${mode}"
 
-    case "$mode" in
+    case "$mode"
+    in
 
         full|full_install|install)
+
             installer_log_info \
                 "installer_run: full installation requested"
 
             if installer_full_install
             then
                 return 0
-            else
-                rc=$?
-                return "$rc"
             fi
+
+            rc=$?
+
+            return "$rc"
             ;;
 
         stage)
-            stage="${2:-}"
 
             if [[ -z "$stage" ]]
             then
                 installer_log_error \
                     "installer_run: stage name is required"
+
                 return 1
             fi
 
             installer_log_info \
-                "installer_run: stage requested: $stage"
+                "installer_run: stage requested: ${stage}"
 
             if installer_run_stage "$stage"
             then
                 return 0
-            else
-                rc=$?
-                return "$rc"
             fi
+
+            rc=$?
+
+            return "$rc"
             ;;
 
         menu)
+
             installer_log_info \
                 "installer_run: starting main menu"
 
@@ -632,30 +701,35 @@ installer_run()
             then
                 installer_log_error \
                     "installer_run: menu_main() is not loaded"
+
                 return 127
             fi
 
             if menu_main
             then
                 return 0
-            else
-                rc=$?
-                installer_log_error \
-                    "installer_run: menu_main() returned rc=$rc"
-                return "$rc"
             fi
+
+            rc=$?
+
+            installer_log_error \
+                "installer_run: menu_main() returned rc=${rc}"
+
+            return "$rc"
             ;;
 
         *)
+
             installer_log_error \
-                "installer_run: unknown mode: $mode"
+                "installer_run: unknown mode: ${mode}"
+
             return 2
             ;;
     esac
 }
 
 #============================================================
-# MENU ENTRY POINT
+# START MENU
 #============================================================
 
 installer_start_menu()
@@ -667,6 +741,7 @@ installer_start_menu()
     then
         installer_log_error \
             "installer_start_menu: menu_main() is not loaded"
+
         return 127
     fi
 
@@ -676,20 +751,21 @@ installer_start_menu()
     if menu_main
     then
         installer_log_info \
-            "installer_start_menu: menu_main() returned 0"
+            "installer_start_menu: menu_main() returned rc=0"
+
         return 0
-    else
-        local rc=$?
-
-        installer_log_error \
-            "installer_start_menu: menu_main() returned rc=$rc"
-
-        return "$rc"
     fi
+
+    local rc=$?
+
+    installer_log_error \
+        "installer_start_menu: menu_main() returned rc=${rc}"
+
+    return "$rc"
 }
 
 #============================================================
-# MAIN ENTRY
+# MAIN CONTROLLER ENTRY
 #============================================================
 
 installer_main()
@@ -704,14 +780,16 @@ installer_main()
         "Arch Installer controller started"
 
     installer_log_info \
-        "Mode: $mode"
+        "Mode: ${mode}"
 
     installer_log_info \
         "============================================================"
 
-    case "$mode" in
+    case "$mode"
+    in
 
         menu)
+
             installer_log_info \
                 "Controller: entering menu mode"
 
@@ -721,9 +799,11 @@ installer_main()
             else
                 rc=$?
             fi
+
             ;;
 
         full|full_install|install)
+
             installer_log_info \
                 "Controller: entering full installation mode"
 
@@ -733,23 +813,31 @@ installer_main()
             else
                 rc=$?
             fi
+
             ;;
 
         stage)
-            installer_log_info \
-                "Controller: entering single-stage mode"
 
-            if installer_run_stage "${2:-}"
+            if [[ -z "${2:-}" ]]
+            then
+                installer_log_error \
+                    "Controller: stage name is required"
+
+                rc=1
+            elif installer_run_stage "$2"
             then
                 rc=0
             else
                 rc=$?
             fi
+
             ;;
 
         *)
+
             installer_log_error \
-                "Unknown installer mode: $mode"
+                "Unknown installer mode: ${mode}"
+
             rc=2
             ;;
     esac
@@ -761,7 +849,7 @@ installer_main()
         "Arch Installer controller finished"
 
     installer_log_info \
-        "Return code: $rc"
+        "Return code: ${rc}"
 
     installer_log_info \
         "============================================================"
@@ -798,3 +886,4 @@ then
     installer_main "$@"
     exit $?
 fi
+

@@ -3,48 +3,105 @@
 #============================================================
 #  Arch Installer
 #------------------------------------------------------------
-#  network.sh
+#  installer/network.sh
 #
-#  Настройка сети в installer Live environment.
+#  Настройка сетевого соединения в Arch Linux Live ISO.
 #
 #  Ответственность:
-#   • Обнаружение сетевых интерфейсов
-#   • Выбор интерфейса
-#   • Проверка link state
-#   • Попытка активации интерфейса через NetworkManager
-#   • Проверка IP
-#   • Проверка DNS
-#   • Проверка доступа в Интернет
-#   • Сохранение NETWORK_INTERFACE
+#   • проверка сетевых утилит
+#   • проверка состояния сети
+#   • определение интерфейсов
+#   • запуск NetworkManager при наличии
+#   • проверка DNS
+#   • проверка доступа к Internet
+#   • сохранение результата в CONFIG
 #
-#  Не выполняет:
-#   • Установку NetworkManager
-#   • Постоянную настройку target system
-#   • Настройку firewall
+#  Важно:
+#   Этот этап настраивает сеть Live ISO.
+#   Сеть установленной системы настраивается другими модулями.
+#
 #============================================================
 
-[[ -n "${NETWORK_SH_LOADED:-}" ]] && return
+#============================================================
+# Load guard
+#============================================================
 
-readonly NETWORK_SH_LOADED=1
+if [[ -n "${NETWORK_SH_LOADED:-}" ]]
+then
+    return 0 2>/dev/null || exit 0
+fi
 
-#------------------------------------------------------------
+NETWORK_SH_LOADED=1
+export NETWORK_SH_LOADED
+
+#============================================================
 # State
-#------------------------------------------------------------
+#============================================================
 
-declare -a NETWORK_INTERFACES=()
+NETWORK_INTERFACE=""
+NETWORK_CONNECTION=""
+NETWORK_ONLINE=0
+NETWORK_DNS_OK=0
 
-NETWORK_SELECTED=0
+#============================================================
+# Logging
+#============================================================
 
-#------------------------------------------------------------
-# Dependency check
-#------------------------------------------------------------
+network_log_info()
+{
+    if declare -F log_info >/dev/null 2>&1
+    then
+        log_info "$@" || true
+    elif declare -F logger_info >/dev/null 2>&1
+    then
+        logger_info "$@" || true
+    else
+        printf '[INFO] %s\n' "$*" >&2
+    fi
+
+    return 0
+}
+
+network_log_warn()
+{
+    if declare -F log_warn >/dev/null 2>&1
+    then
+        log_warn "$@" || true
+    elif declare -F logger_warn >/dev/null 2>&1
+    then
+        logger_warn "$@" || true
+    else
+        printf '[WARN] %s\n' "$*" >&2
+    fi
+
+    return 0
+}
+
+network_log_error()
+{
+    if declare -F log_error >/dev/null 2>&1
+    then
+        log_error "$@" || true
+    elif declare -F logger_error >/dev/null 2>&1
+    then
+        logger_error "$@" || true
+    else
+        printf '[ERROR] %s\n' "$*" >&2
+    fi
+
+    return 0
+}
+
+#============================================================
+# Check dependencies
+#============================================================
 
 network_check_dependencies()
 {
     local required=(
         ip
-        grep
         ping
+        getent
     )
 
     local cmd
@@ -53,573 +110,739 @@ network_check_dependencies()
     do
         if ! command -v "$cmd" >/dev/null 2>&1
         then
-            dialog_error \
+            network_log_error \
                 "Required network program not found: ${cmd}"
-
             return 1
         fi
     done
-}
-
-#------------------------------------------------------------
-# Load interfaces
-#------------------------------------------------------------
-
-network_load_interfaces()
-{
-    local iface
-
-    NETWORK_INTERFACES=()
-    NETWORK_SELECTED=0
-
-    while IFS= read -r iface
-    do
-        [[ "$iface" == "lo" ]] && \
-            continue
-
-        [[ -n "$iface" ]] || \
-            continue
-
-        NETWORK_INTERFACES+=(
-            "$iface"
-        )
-    done < <(
-        find \
-            /sys/class/net \
-            -mindepth 1 \
-            -maxdepth 1 \
-            -printf '%f\n' |
-        sort
-    )
-
-    if (( ${#NETWORK_INTERFACES[@]} == 0 ))
-    then
-        dialog_error \
-            "No network interfaces found"
-
-        return 1
-    fi
-
-    logger_info \
-        "Network interfaces found: ${NETWORK_INTERFACES[*]}"
-}
-
-#------------------------------------------------------------
-# Interface exists
-#------------------------------------------------------------
-
-network_check_interface()
-{
-    local iface="$1"
-
-    if [[ ! -e "/sys/class/net/${iface}" ]]
-    then
-        logger_error \
-            "Network interface does not exist: ${iface}"
-
-        return 1
-    fi
-}
-
-#------------------------------------------------------------
-# Interface state
-#------------------------------------------------------------
-
-network_status()
-{
-    local iface="$1"
-
-    if ip \
-        link \
-        show \
-        "$iface" |
-        grep -q 'state UP'
-    then
-        printf 'UP'
-    else
-        printf 'DOWN'
-    fi
-}
-
-#------------------------------------------------------------
-# Carrier state
-#------------------------------------------------------------
-
-network_carrier()
-{
-    local iface="$1"
-    local carrier_file
-
-    carrier_file="/sys/class/net/${iface}/carrier"
-
-    if [[ -f "$carrier_file" ]]
-    then
-        if [[ "$(cat "$carrier_file")" == "1" ]]
-        then
-            printf 'LINK'
-            return 0
-        fi
-
-        printf 'NO-LINK'
-        return 0
-    fi
-
-    printf 'UNKNOWN'
-}
-
-#------------------------------------------------------------
-# IP address
-#------------------------------------------------------------
-
-network_ip()
-{
-    local iface="$1"
-
-    ip \
-        -4 \
-        -o \
-        addr \
-        show \
-        dev "$iface" |
-    awk '{print $4}' |
-    head -n 1
-}
-
-#------------------------------------------------------------
-# Draw
-#------------------------------------------------------------
-
-network_draw()
-{
-    local row=5
-    local index
-    local iface
-    local status
-    local carrier
-    local address
-
-    tui_clear
-
-    titlebar_draw \
-        "Network setup"
-
-    draw_panel \
-        "Select interface" \
-        3 \
-        5 \
-        18 \
-        72
-
-    for index in "${!NETWORK_INTERFACES[@]}"
-    do
-        iface="${NETWORK_INTERFACES[index]}"
-
-        status="$(
-            network_status \
-                "$iface"
-        )"
-
-        carrier="$(
-            network_carrier \
-                "$iface"
-        )"
-
-        address="$(
-            network_ip \
-                "$iface"
-        )"
-
-        cursor_move \
-            "$row" \
-            8
-
-        if (( index == NETWORK_SELECTED ))
-        then
-            printf '> '
-        else
-            printf '  '
-        fi
-
-        printf \
-            '%-12s %-6s %-8s %s' \
-            "$iface" \
-            "$status" \
-            "$carrier" \
-            "${address:-no-ip}"
-
-        ((row += 1))
-    done
-
-    statusbar_draw \
-        "↑↓ Select   Enter Apply   F2 Test   Esc Back"
-
-    screen_refresh
-}
-
-#------------------------------------------------------------
-# Navigation
-#------------------------------------------------------------
-
-network_previous()
-{
-    if (( NETWORK_SELECTED > 0 ))
-    then
-        ((NETWORK_SELECTED -= 1))
-    else
-        NETWORK_SELECTED=$(( ${#NETWORK_INTERFACES[@]} - 1 ))
-    fi
-}
-
-network_next()
-{
-    if (( NETWORK_SELECTED < ${#NETWORK_INTERFACES[@]} - 1 ))
-    then
-        ((NETWORK_SELECTED += 1))
-    else
-        NETWORK_SELECTED=0
-    fi
-}
-
-#------------------------------------------------------------
-# Bring interface up
-#------------------------------------------------------------
-
-network_link_up()
-{
-    local iface="$1"
-
-    network_check_interface \
-        "$iface" || \
-        return 1
-
-    logger_info \
-        "Bringing interface up: ${iface}"
-
-    ip \
-        link \
-        set \
-        dev "$iface" \
-        up \
-        || {
-            logger_error \
-                "Failed to bring interface up: ${iface}"
-
-            return 1
-        }
-}
-
-#------------------------------------------------------------
-# NetworkManager status
-#------------------------------------------------------------
-
-network_manager_available()
-{
-    command -v nmcli >/dev/null 2>&1
-}
-
-#------------------------------------------------------------
-# Connect through NetworkManager
-#------------------------------------------------------------
-
-network_nm_connect()
-{
-    local iface="$1"
-
-    if ! network_manager_available
-    then
-        return 0
-    fi
-
-    logger_info \
-        "Attempting NetworkManager connection: ${iface}"
-
-    nmcli \
-        device \
-        connect \
-        "$iface" \
-        >/dev/null 2>&1 \
-        || {
-            logger_warn \
-                "NetworkManager could not activate ${iface}"
-
-            return 1
-        }
 
     return 0
 }
 
-#------------------------------------------------------------
-# Check IP
-#------------------------------------------------------------
+#============================================================
+# Check NetworkManager
+#============================================================
+
+network_check_networkmanager()
+{
+    if ! command -v nmcli >/dev/null 2>&1
+    then
+        network_log_warn \
+            "nmcli is not available"
+
+        return 1
+    fi
+
+    return 0
+}
+
+#============================================================
+# Detect interface
+#============================================================
+
+network_detect_interface()
+{
+    local interface=""
+    local state=""
+
+    NETWORK_INTERFACE=""
+
+    #--------------------------------------------------------
+    # Prefer NetworkManager when available.
+    #--------------------------------------------------------
+
+    if command -v nmcli >/dev/null 2>&1
+    then
+        interface="$(
+            nmcli \
+                -t \
+                -f DEVICE,TYPE,STATE \
+                device status \
+                2>/dev/null |
+            awk -F: '
+                $2 != "loopback" &&
+                $1 != "lo" &&
+                ($3 == "connected" || $3 == "connecting")
+                {
+                    print $1
+                    exit
+                }
+            '
+        )"
+    fi
+
+    #--------------------------------------------------------
+    # Fallback to iproute2.
+    #--------------------------------------------------------
+
+    if [[ -z "$interface" ]]
+    then
+        while IFS= read -r interface
+        do
+            [[ -z "$interface" ]] && continue
+
+            [[ "$interface" == "lo" ]] && continue
+
+            state="$(
+                ip \
+                    -o \
+                    link \
+                    show \
+                    "$interface" \
+                    2>/dev/null |
+                awk -F': ' '{print $2}' |
+                sed -E 's/.*state ([A-Z]+).*/\1/'
+            )"
+
+            if [[ "$state" == "UP" ]]
+            then
+                break
+            fi
+        done < <(
+            ip \
+                -o \
+                link \
+                show \
+                2>/dev/null |
+            awk -F': ' '{print $2}' |
+            cut -d'@' -f1
+        )
+    fi
+
+    if [[ -z "$interface" ]]
+    then
+        NETWORK_INTERFACE=""
+        network_log_warn \
+            "No active network interface detected"
+        return 1
+    fi
+
+    NETWORK_INTERFACE="$interface"
+
+    network_log_info \
+        "Network interface detected: ${NETWORK_INTERFACE}"
+
+    return 0
+}
+
+#============================================================
+# Check IP address
+#============================================================
 
 network_check_ip()
 {
-    local iface="$1"
-    local address
+    local interface="${NETWORK_INTERFACE:-}"
 
-    address="$(
-        network_ip \
-            "$iface"
-    )"
-
-    if [[ -z "$address" ]]
+    if [[ -z "$interface" ]]
     then
-        logger_error \
-            "No IPv4 address assigned to ${iface}"
-
+        network_log_error \
+            "Network interface is not selected"
         return 1
     fi
 
-    logger_info \
-        "IPv4 address on ${iface}: ${address}"
-}
-
-#------------------------------------------------------------
-# Check route
-#------------------------------------------------------------
-
-network_check_route()
-{
-    if ! ip \
-        route \
-        get \
-        1.1.1.1 \
-        >/dev/null 2>&1
+    if ip \
+        -4 \
+        addr \
+        show \
+        dev "$interface" |
+        grep -q \
+            'inet '
     then
-        logger_error \
-            "Default route is unavailable"
-
-        return 1
-    fi
-
-    logger_info \
-        "Default route is available"
-}
-
-#------------------------------------------------------------
-# Check DNS
-#------------------------------------------------------------
-
-network_check_dns()
-{
-    if getent \
-        hosts \
-        archlinux.org \
-        >/dev/null 2>&1
-    then
-        logger_info \
-            "DNS resolution is working"
-
+        network_log_info \
+            "IPv4 address detected on ${interface}"
         return 0
     fi
 
-    logger_error \
-        "DNS resolution failed"
+    if ip \
+        -6 \
+        addr \
+        show \
+        dev "$interface" |
+        grep -q \
+            'inet6 '
+    then
+        network_log_info \
+            "IPv6 address detected on ${interface}"
+        return 0
+    fi
+
+    network_log_warn \
+        "No IP address detected on ${interface}"
 
     return 1
 }
 
-#------------------------------------------------------------
+#============================================================
+# Check default route
+#============================================================
+
+network_check_route()
+{
+    if ip \
+        route \
+        show \
+        default |
+        grep -q \
+            '^default'
+    then
+        network_log_info \
+            "Default network route detected"
+        return 0
+    fi
+
+    network_log_warn \
+        "Default network route is missing"
+
+    return 1
+}
+
+#============================================================
+# Check DNS
+#============================================================
+
+network_check_dns()
+{
+    local host="${1:-archlinux.org}"
+
+    NETWORK_DNS_OK=0
+
+    if getent \
+        hosts \
+        "$host" \
+        >/dev/null 2>&1
+    then
+        NETWORK_DNS_OK=1
+
+        network_log_info \
+            "DNS resolution works: ${host}"
+
+        return 0
+    fi
+
+    network_log_warn \
+        "DNS resolution failed: ${host}"
+
+    return 1
+}
+
+#============================================================
 # Check Internet
-#------------------------------------------------------------
+#============================================================
 
 network_check_internet()
 {
-    logger_info \
-        "Checking Internet connectivity"
-
-    network_check_route || \
-        return 1
-
-    network_check_dns || \
-        return 1
+    local host="${1:-archlinux.org}"
 
     if ping \
         -c 1 \
         -W 3 \
-        archlinux.org \
+        "$host" \
         >/dev/null 2>&1
     then
-        logger_info \
-            "Internet connection available"
+        NETWORK_ONLINE=1
 
-        dialog_message \
-            "Network" \
-            "Internet connection available"
+        network_log_info \
+            "Internet connectivity verified: ${host}"
 
         return 0
     fi
 
-    logger_error \
-        "Internet connectivity test failed"
+    NETWORK_ONLINE=0
 
-    dialog_error \
-        "No Internet connection"
+    network_log_warn \
+        "Internet connectivity test failed: ${host}"
 
     return 1
 }
 
-#------------------------------------------------------------
-# Apply
-#------------------------------------------------------------
+#============================================================
+# Start NetworkManager
+#============================================================
 
-network_apply()
+network_start_networkmanager()
 {
-    local iface
+    #--------------------------------------------------------
+    # NetworkManager may not be installed in minimal
+    # environments. Do not treat that as fatal.
+    #--------------------------------------------------------
 
-    iface="${NETWORK_INTERFACES[NETWORK_SELECTED]}"
-
-    network_check_interface \
-        "$iface" || \
-        return 1
-
-    network_link_up \
-        "$iface" || \
-        return 1
-
-    if network_manager_available
+    if ! command -v nmcli >/dev/null 2>&1
     then
-        network_nm_connect \
-            "$iface" || true
+        network_log_warn \
+            "NetworkManager is unavailable"
+
+        return 1
+    fi
+
+    if ! command -v systemctl >/dev/null 2>&1
+    then
+        network_log_warn \
+            "systemctl is unavailable"
+
+        return 1
+    fi
+
+    if systemctl \
+        is-active \
+        --quiet \
+        NetworkManager.service
+    then
+        network_log_info \
+            "NetworkManager is already active"
+
+        return 0
+    fi
+
+    network_log_info \
+        "Starting NetworkManager"
+
+    if systemctl \
+        start \
+        NetworkManager.service
+    then
+        network_log_info \
+            "NetworkManager started successfully"
+        return 0
+    fi
+
+    network_log_warn \
+        "Failed to start NetworkManager"
+
+    return 1
+}
+
+#============================================================
+# Refresh connections
+#============================================================
+
+network_refresh_connections()
+{
+    if ! command -v nmcli >/dev/null 2>&1
+    then
+        return 1
+    fi
+
+    nmcli \
+        device \
+        status \
+        >/dev/null 2>&1 \
+        || true
+
+    return 0
+}
+
+#============================================================
+# Try automatic connection
+#============================================================
+
+network_autoconnect()
+{
+    local interface="${NETWORK_INTERFACE:-}"
+
+    if [[ -z "$interface" ]]
+    then
+        return 1
+    fi
+
+    if ! command -v nmcli >/dev/null 2>&1
+    then
+        return 1
+    fi
+
+    #--------------------------------------------------------
+    # Already connected.
+    #--------------------------------------------------------
+
+    if nmcli \
+        -t \
+        -f DEVICE,STATE \
+        device \
+        status \
+        2>/dev/null |
+        grep -Eq \
+            "^${interface}:connected"
+    then
+        network_log_info \
+            "Interface already connected: ${interface}"
+        return 0
+    fi
+
+    network_log_info \
+        "Attempting automatic connection: ${interface}"
+
+    if nmcli \
+        device \
+        connect \
+        "$interface" \
+        >/dev/null 2>&1
+    then
+        network_log_info \
+            "Automatic connection succeeded: ${interface}"
+        return 0
+    fi
+
+    network_log_warn \
+        "Automatic connection failed: ${interface}"
+
+    return 1
+}
+
+#============================================================
+# Save network state
+#============================================================
+
+network_save()
+{
+    if ! declare -F config_set >/dev/null 2>&1
+    then
+        network_log_warn \
+            "config_set() is not available"
+        return 0
     fi
 
     config_set \
         NETWORK_INTERFACE \
-        "$iface"
+        "${NETWORK_INTERFACE:-}" || return 1
 
     config_set \
-        NETWORK_ENABLED \
-        "1"
+        NETWORK_CONNECTION \
+        "${NETWORK_CONNECTION:-}" || return 1
 
-    config_save
+    config_set \
+        NETWORK_ONLINE \
+        "${NETWORK_ONLINE}" || return 1
 
-    logger_info \
-        "Selected network interface: ${iface}"
+    config_set \
+        NETWORK_DNS_OK \
+        "${NETWORK_DNS_OK}" || return 1
 
-    if network_check_ip "$iface"
+    if declare -F config_save >/dev/null 2>&1
     then
-        dialog_message \
-            "Network" \
-            "Selected interface: ${iface}"
-    else
-        dialog_message \
-            "Network" \
-            "Interface selected: ${iface}\nNo IP address yet"
+        if ! config_save
+        then
+            network_log_error \
+                "Failed to save network configuration"
+            return 1
+        fi
     fi
 
     return 0
 }
 
-#------------------------------------------------------------
-# Test selected interface
-#------------------------------------------------------------
+#============================================================
+# Draw network status
+#============================================================
 
-network_test()
+network_draw()
 {
-    local iface
+    local interface="${NETWORK_INTERFACE:-none}"
+    local online="NO"
+    local dns="NO"
+    local row=5
 
-    iface="$(config_get NETWORK_INTERFACE)"
-
-    if [[ -z "$iface" ]]
+    if (( NETWORK_ONLINE == 1 ))
     then
-        dialog_error \
-            "Network interface is not selected"
+        online="YES"
+    fi
+
+    if (( NETWORK_DNS_OK == 1 ))
+    then
+        dns="YES"
+    fi
+
+    #--------------------------------------------------------
+    # Clear
+    #--------------------------------------------------------
+
+    if declare -F tui_clear >/dev/null 2>&1
+    then
+        tui_clear || return 1
+    else
+        printf '\033[2J\033[H'
+    fi
+
+    #--------------------------------------------------------
+    # Title
+    #--------------------------------------------------------
+
+    if declare -F titlebar_draw >/dev/null 2>&1
+    then
+        titlebar_draw \
+            "Network configuration" || return 1
+    else
+        printf '\nNetwork configuration\n'
+    fi
+
+    #--------------------------------------------------------
+    # Information
+    #--------------------------------------------------------
+
+    if declare -F tui_move >/dev/null 2>&1
+    then
+        tui_move "$row" 5 || return 1
+
+        tui_print \
+            "Interface : ${interface}" || return 1
+
+        row=$((row + 2))
+
+        tui_move "$row" 5 || return 1
+
+        tui_print \
+            "Internet  : ${online}" || return 1
+
+        row=$((row + 1))
+
+        tui_move "$row" 5 || return 1
+
+        tui_print \
+            "DNS       : ${dns}" || return 1
+
+        row=$((row + 2))
+
+        if (( NETWORK_ONLINE == 1 ))
+        then
+            color_info \
+                "Network connection is available." ||
+                return 1
+        else
+            color_error \
+                "Network connection is unavailable." ||
+                true
+        fi
+    else
+        printf '\n'
+        printf 'Interface : %s\n' "$interface"
+        printf 'Internet  : %s\n' "$online"
+        printf 'DNS       : %s\n' "$dns"
+    fi
+
+    #--------------------------------------------------------
+    # Status bar
+    #--------------------------------------------------------
+
+    if declare -F statusbar_draw >/dev/null 2>&1
+    then
+        statusbar_draw \
+            "Enter Continue   Esc Back" ||
+            return 1
+    fi
+
+    if declare -F screen_refresh >/dev/null 2>&1
+    then
+        screen_refresh || return 1
+    elif declare -F tui_flush >/dev/null 2>&1
+    then
+        tui_flush || return 1
+    fi
+
+    return 0
+}
+
+#============================================================
+# Wait for user
+#============================================================
+
+network_wait()
+{
+    local event=""
+
+    while true
+    do
+        TUI_EVENT=""
+
+        if ! event_read
+        then
+            network_log_error \
+                "event_read() failed"
+            return 1
+        fi
+
+        event="${TUI_EVENT:-}"
+
+        case "$event" in
+
+            "$EVENT_SELECT")
+                return 0
+                ;;
+
+            "$EVENT_BACK")
+                return 1
+                ;;
+
+            "$EVENT_NONE")
+                ;;
+
+            *)
+                ;;
+        esac
+    done
+}
+
+#============================================================
+# Main network stage
+#============================================================
+
+network()
+{
+    network_log_info \
+        "Network configuration started"
+
+    #--------------------------------------------------------
+    # Dependencies
+    #--------------------------------------------------------
+
+    network_check_dependencies || return 1
+
+    #--------------------------------------------------------
+    # Start NetworkManager when possible.
+    #--------------------------------------------------------
+
+    network_start_networkmanager || true
+
+    #--------------------------------------------------------
+    # Refresh state
+    #--------------------------------------------------------
+
+    network_refresh_connections || true
+
+    #--------------------------------------------------------
+    # Detect interface
+    #--------------------------------------------------------
+
+    if ! network_detect_interface
+    then
+        network_draw || true
+        network_log_error \
+            "No active network interface detected"
+        network_wait || true
+        return 1
+    fi
+
+    #--------------------------------------------------------
+    # Try automatic connection.
+    #--------------------------------------------------------
+
+    network_autoconnect || true
+
+    #--------------------------------------------------------
+    # Re-detect after connection attempt.
+    #--------------------------------------------------------
+
+    network_detect_interface || true
+
+    #--------------------------------------------------------
+    # Check IP.
+    #--------------------------------------------------------
+
+    if ! network_check_ip
+    then
+        network_log_warn \
+            "Interface has no configured IP address"
+    fi
+
+    #--------------------------------------------------------
+    # Check route.
+    #--------------------------------------------------------
+
+    if ! network_check_route
+    then
+        network_log_warn \
+            "Default route is not available"
+    fi
+
+    #--------------------------------------------------------
+    # DNS.
+    #--------------------------------------------------------
+
+    if network_check_dns
+    then
+        NETWORK_DNS_OK=1
+    else
+        NETWORK_DNS_OK=0
+    fi
+
+    #--------------------------------------------------------
+    # Internet.
+    #--------------------------------------------------------
+
+    if network_check_internet
+    then
+        NETWORK_ONLINE=1
+    else
+        NETWORK_ONLINE=0
+    fi
+
+    #--------------------------------------------------------
+    # Set connection description.
+    #--------------------------------------------------------
+
+    if (( NETWORK_ONLINE == 1 ))
+    then
+        NETWORK_CONNECTION="online"
+    elif (( NETWORK_DNS_OK == 1 ))
+    then
+        NETWORK_CONNECTION="dns-only"
+    else
+        NETWORK_CONNECTION="offline"
+    fi
+
+    #--------------------------------------------------------
+    # Save state.
+    #--------------------------------------------------------
+
+    network_save || return 1
+
+    #--------------------------------------------------------
+    # Display result.
+    #--------------------------------------------------------
+
+    network_draw || return 1
+
+    #--------------------------------------------------------
+    # Internet is required for the subsequent mirror and
+    # package installation stages.
+    #--------------------------------------------------------
+
+    if (( NETWORK_ONLINE != 1 ))
+    then
+        if declare -F dialog_error >/dev/null 2>&1
+        then
+            dialog_error \
+                "Network unavailable" \
+                "Internet connectivity could not be established." \
+                || true
+        fi
+
+        network_log_error \
+            "Network configuration failed: Internet unavailable"
+
+        network_wait || true
 
         return 1
     fi
 
-    network_check_interface \
-        "$iface" || \
-        return 1
-
-    network_link_up \
-        "$iface" || \
-        return 1
-
-    network_check_ip \
-        "$iface" || \
-        return 1
-
-    network_check_internet || \
-        return 1
-}
-
-#------------------------------------------------------------
-# Restore selection
-#------------------------------------------------------------
-
-network_restore_selection()
-{
-    local configured
-    local index
-
-    configured="$(
-        config_get NETWORK_INTERFACE \
-            2>/dev/null \
+    if declare -F dialog_message >/dev/null 2>&1
+    then
+        dialog_message \
+            "Network" \
+            "Internet connection is available." \
             || true
-    )"
+    fi
 
-    [[ -n "$configured" ]] || \
-        return 0
+    network_log_info \
+        "Network configuration completed successfully"
 
-    for index in "${!NETWORK_INTERFACES[@]}"
-    do
-        if [[ "${NETWORK_INTERFACES[index]}" == "$configured" ]]
-        then
-            NETWORK_SELECTED="$index"
-            return 0
-        fi
-    done
+    return 0
 }
 
-#------------------------------------------------------------
-# Main
-#------------------------------------------------------------
+#============================================================
+# Direct execution
+#============================================================
 
-network()
-{
-    local event
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]
+then
+    network
+    exit $?
+fi
 
-    logger_info \
-        "Network configuration started"
-
-    network_check_dependencies || \
-        return 1
-
-    network_load_interfaces || \
-        return 1
-
-    network_restore_selection
-
-    while true
-    do
-        network_draw
-
-        event="$(
-            event_read
-        )"
-
-        case "$event" in
-            "$EVENT_UP")
-                network_previous
-                ;;
-            "$EVENT_DOWN")
-                network_next
-                ;;
-            "$EVENT_SELECT")
-                network_apply || \
-                    continue
-                ;;
-            "$EVENT_HELP")
-                network_test || \
-                    true
-                ;;
-            "$EVENT_BACK")
-                break
-                ;;
-        esac
-    done
-
-    logger_info \
-        "Network configuration finished"
-}

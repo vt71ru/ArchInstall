@@ -1,3 +1,4 @@
+```bash
 #!/usr/bin/env bash
 #
 # ============================================================
@@ -34,18 +35,10 @@ export ARCH_INSTALLER_INSTALLER_SH_LOADED
 # Этапы полной установки
 # ============================================================
 #
-# ВАЖНО:
-#
 # locale_generate выполняется ПОСЛЕ:
 #   filesystem
 #   mount
 #   packages
-#
-# потому что locale_generate.sh ожидает:
-#
-#   /mnt/etc/locale.gen
-#   /mnt/usr/bin/locale-gen
-#   смонтированную целевую систему
 #
 # ============================================================
 
@@ -69,7 +62,7 @@ declare -ar INSTALLER_STAGES=(
 
 
 # ============================================================
-# Logging wrappers
+# LOGGING
 # ============================================================
 
 installer_log_info()
@@ -78,6 +71,8 @@ installer_log_info()
     then
         log_info "$*"
     fi
+
+    return 0
 }
 
 installer_log_warn()
@@ -86,6 +81,8 @@ installer_log_warn()
     then
         log_warn "$*"
     fi
+
+    return 0
 }
 
 installer_log_error()
@@ -94,11 +91,13 @@ installer_log_error()
     then
         log_error "$*"
     fi
+
+    return 0
 }
 
 
 # ============================================================
-# Получить количество этапов
+# STAGE COUNT
 # ============================================================
 
 installer_get_stage_count()
@@ -108,7 +107,7 @@ installer_get_stage_count()
 
 
 # ============================================================
-# Получить имя этапа по индексу
+# STAGE BY INDEX
 # ============================================================
 
 installer_get_stage_by_index()
@@ -132,19 +131,21 @@ installer_get_stage_by_index()
     fi
 
     printf '%s\n' "${INSTALLER_STAGES[$index]}"
+
+    return 0
 }
 
 
 # ============================================================
-# Получить название этапа
+# STAGE TITLE
 # ============================================================
 
 installer_get_stage_title()
 {
     local stage="${1:-}"
 
-    case "$stage" in
-
+    case "$stage"
+    in
         keyboard)
             printf '%s\n' "Keyboard configuration"
             ;;
@@ -212,19 +213,21 @@ installer_get_stage_title()
             return 1
             ;;
     esac
+
+    return 0
 }
 
 
 # ============================================================
-# Получить функцию этапа
+# STAGE FUNCTION
 # ============================================================
 
 installer_get_stage_function()
 {
     local stage="${1:-}"
 
-    case "$stage" in
-
+    case "$stage"
+    in
         keyboard)
             printf '%s\n' "keyboard"
             ;;
@@ -292,11 +295,13 @@ installer_get_stage_function()
             return 1
             ;;
     esac
+
+    return 0
 }
 
 
 # ============================================================
-# Проверка существования этапа
+# CHECK ONE STAGE
 # ============================================================
 
 installer_check_stage()
@@ -333,7 +338,7 @@ installer_check_stage()
 
 
 # ============================================================
-# Проверка всех этапов
+# CHECK ALL STAGES
 # ============================================================
 
 installer_check_all_stages()
@@ -374,7 +379,7 @@ installer_check_all_stages()
 
 
 # ============================================================
-# Выполнить один этап
+# RUN ONE STAGE
 # ============================================================
 
 installer_run_stage()
@@ -449,7 +454,7 @@ installer_run_stage()
 
 
 # ============================================================
-# Полная установка
+# FULL INSTALLATION
 # ============================================================
 
 installer_full_install()
@@ -473,7 +478,7 @@ installer_full_install()
         "========================================"
 
     # --------------------------------------------------------
-    # Проверка всех функций перед началом установки.
+    # Проверка API всех этапов ДО начала установки.
     # --------------------------------------------------------
 
     if ! installer_check_all_stages
@@ -490,7 +495,17 @@ installer_full_install()
 
     for stage in "${INSTALLER_STAGES[@]}"
     do
-        (( index++ ))
+        #
+        # ВАЖНО:
+        #
+        # Нельзя использовать:
+        #
+        #   (( index++ ))
+        #
+        # при set -e, поскольку первая итерация возвращает
+        # статус 1 при старом значении index=0.
+        #
+        (( index += 1 ))
 
         if ! title="$(installer_get_stage_title "$stage")"
         then
@@ -548,16 +563,17 @@ installer_full_install()
 
 
 # ============================================================
-# Запуск одного этапа через API
+# GENERIC RUN
 # ============================================================
 
 installer_run()
 {
     local action="${1:-}"
+
     shift || true
 
-    case "$action" in
-
+    case "$action"
+    in
         full|full_install|install)
             installer_full_install "$@"
             ;;
@@ -589,7 +605,7 @@ installer_run()
 
 
 # ============================================================
-# Запуск главного меню
+# START MENU
 # ============================================================
 
 installer_start_menu()
@@ -608,7 +624,7 @@ installer_start_menu()
 
 
 # ============================================================
-# Главный entry point
+# MAIN
 # ============================================================
 
 installer_main()
@@ -618,7 +634,7 @@ installer_main()
 
 
 # ============================================================
-# Совместимые alias
+# COMPATIBILITY ALIASES
 # ============================================================
 
 installer_install()
@@ -626,20 +642,21 @@ installer_install()
     installer_full_install "$@"
 }
 
-
 installer_full()
 {
     installer_full_install "$@"
 }
 
-
 installer_stage()
 {
     installer_run_stage "$@"
 }
+
+
 # ============================================================
-# Проверка API при загрузке
+# API CHECK
 # ============================================================
+
 installer_api_check()
 {
     local required_function=""
@@ -666,12 +683,14 @@ installer_api_check()
 
     return 0
 }
+
+
 # ============================================================
-# Прямой запуск
+# DIRECT EXECUTION
 # ============================================================
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]
 then
     installer_main "$@"
 fi
-
+```

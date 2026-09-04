@@ -43,6 +43,12 @@ packages_check_dependencies()
     local required=(
         pacstrap
         genfstab
+        pacman
+        mountpoint
+        mkdir
+        mv
+        rm
+        chmod
     )
 
     local cmd
@@ -58,13 +64,15 @@ packages_check_dependencies()
         fi
     done
 
-    if ! mountpoint -q /mnt
+    if ! /usr/bin/mountpoint -q /mnt
     then
         dialog_error \
             "/mnt is not mounted"
 
         return 1
     fi
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -96,6 +104,8 @@ packages_init()
 
     logger_info \
         "Base package list initialized"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -132,6 +142,8 @@ packages_add()
 
     logger_debug \
         "Added package: ${package}"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -142,9 +154,12 @@ packages_load_desktop()
 {
     local desktop
 
-    desktop="$(config_get DESKTOP)"
+    desktop="$(
+        config_get DESKTOP
+    )"
 
     case "$desktop" in
+
         gnome)
             packages_add \
                 gnome
@@ -155,6 +170,7 @@ packages_load_desktop()
             packages_add \
                 gdm
             ;;
+
         kde)
             packages_add \
                 plasma
@@ -165,6 +181,7 @@ packages_load_desktop()
             packages_add \
                 sddm
             ;;
+
         xfce)
             packages_add \
                 xfce4
@@ -175,8 +192,10 @@ packages_load_desktop()
             packages_add \
                 lightdm
             ;;
+
         "")
             ;;
+
         *)
             logger_warn \
                 "Unknown desktop environment: ${desktop}"
@@ -199,9 +218,12 @@ packages_load_gpu()
 {
     local gpu
 
-    gpu="$(config_get GPU_DRIVER)"
+    gpu="$(
+        config_get GPU_DRIVER
+    )"
 
     case "$gpu" in
+
         nvidia)
             packages_add \
                 nvidia
@@ -209,6 +231,7 @@ packages_load_gpu()
             packages_add \
                 nvidia-utils
             ;;
+
         amd)
             packages_add \
                 mesa
@@ -216,6 +239,7 @@ packages_load_gpu()
             packages_add \
                 lib32-mesa
             ;;
+
         intel)
             packages_add \
                 mesa
@@ -223,8 +247,10 @@ packages_load_gpu()
             packages_add \
                 lib32-mesa
             ;;
+
         "")
             ;;
+
         *)
             logger_warn \
                 "Unknown GPU driver: ${gpu}"
@@ -295,6 +321,8 @@ packages_load_system()
 
     packages_add \
         zip
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -308,6 +336,10 @@ packages_build_list()
     local duplicate
 
     PACKAGES_LIST=()
+
+    #--------------------------------------------------------
+    # Add base packages
+    #--------------------------------------------------------
 
     for package in "${BASE_PACKAGES[@]}"
     do
@@ -330,6 +362,10 @@ packages_build_list()
         fi
     done
 
+    #--------------------------------------------------------
+    # Add extra packages
+    #--------------------------------------------------------
+
     for package in "${EXTRA_PACKAGES[@]}"
     do
         duplicate=0
@@ -351,6 +387,10 @@ packages_build_list()
         fi
     done
 
+    #--------------------------------------------------------
+    # Validate
+    #--------------------------------------------------------
+
     if (( ${#PACKAGES_LIST[@]} == 0 ))
     then
         dialog_error \
@@ -367,6 +407,8 @@ packages_build_list()
         logger_debug \
             "Package: ${package}"
     done
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -375,19 +417,29 @@ packages_build_list()
 
 packages_validate_target()
 {
-    if [[ ! -d /mnt/etc ]]
+    if [[ ! -d /mnt ]]
     then
-        logger_warn \
-            "/mnt/etc does not exist yet"
+        dialog_error \
+            "Target root /mnt does not exist"
+
+        return 1
     fi
 
-    if ! mountpoint -q /mnt
+    if ! /usr/bin/mountpoint -q /mnt
     then
         dialog_error \
             "Target root /mnt is not mounted"
 
         return 1
     fi
+
+    if [[ ! -d /mnt/etc ]]
+    then
+        logger_info \
+            "/mnt/etc does not exist yet; pacstrap will create it"
+    fi
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -399,19 +451,21 @@ packages_install_base()
     logger_info \
         "Installing base system"
 
-    pacstrap \
+    if ! pacstrap \
         -K \
         /mnt \
-        "${PACKAGES_LIST[@]}" \
-        || {
-            logger_error \
-                "pacstrap failed"
+        "${PACKAGES_LIST[@]}"
+    then
+        logger_error \
+            "pacstrap failed"
 
-            return 1
-        }
+        return 1
+    fi
 
     logger_info \
         "Base system installation completed"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -422,19 +476,21 @@ packages_check_target()
 {
     local package
 
-    [[ -d /mnt/etc ]] || {
+    if [[ ! -d /mnt/etc ]]
+    then
         logger_error \
             "Target /mnt/etc does not exist after pacstrap"
 
         return 1
-    }
+    fi
 
-    [[ -x /mnt/usr/bin/bash ]] || {
+    if [[ ! -x /mnt/usr/bin/bash ]]
+    then
         logger_error \
             "Target system does not contain bash"
 
         return 1
-    }
+    fi
 
     logger_info \
         "Installed target verification passed"
@@ -459,6 +515,8 @@ packages_check_target()
             return 1
         fi
     done
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -476,19 +534,19 @@ packages_generate_fstab()
     logger_info \
         "Generating fstab"
 
-    genfstab \
+    if ! genfstab \
         -U \
         /mnt \
-        > "$tmp_fstab" \
-        || {
-            rm -f \
-                "$tmp_fstab"
+        > "$tmp_fstab"
+    then
+        rm -f \
+            "$tmp_fstab"
 
-            logger_error \
-                "Failed generating fstab"
+        logger_error \
+            "Failed generating fstab"
 
-            return 1
-        }
+        return 1
+    fi
 
     if [[ ! -s "$tmp_fstab" ]]
     then
@@ -501,16 +559,34 @@ packages_generate_fstab()
         return 1
     fi
 
-    mv \
+    if ! mv \
         -f \
         "$tmp_fstab" \
         "$fstab"
+    then
+        rm -f \
+            "$tmp_fstab"
 
-    chmod 644 \
+        logger_error \
+            "Failed saving fstab"
+
+        return 1
+    fi
+
+    if ! chmod \
+        644 \
         "$fstab"
+    then
+        logger_error \
+            "Failed setting fstab permissions"
+
+        return 1
+    fi
 
     logger_info \
         "fstab generated: ${fstab}"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -525,22 +601,42 @@ packages_save_list()
 
     if [[ ! -d /mnt/root ]]
     then
-        mkdir -p \
-            /mnt/root
+        if ! mkdir -p /mnt/root
+        then
+            logger_error \
+                "Failed to create /mnt/root"
+
+            return 1
+        fi
     fi
 
     logger_info \
         "Saving package list"
 
-    printf '%s\n' \
+    if ! printf '%s\n' \
         "${PACKAGES_LIST[@]}" \
         > "$file"
+    then
+        logger_error \
+            "Failed to save package list"
 
-    chmod 600 \
+        return 1
+    fi
+
+    if ! chmod \
+        600 \
         "$file"
+    then
+        logger_error \
+            "Failed to set package list permissions"
+
+        return 1
+    fi
 
     logger_info \
         "Package list saved: ${file}"
+
+    return 0
 }
 
 #------------------------------------------------------------
@@ -549,14 +645,29 @@ packages_save_list()
 
 packages_save()
 {
-    config_save
+    if ! config_save
+    then
+        logger_error \
+            "Failed to save package installation state"
+
+        return 1
+    fi
 
     logger_info \
         "Package installation state saved"
+
+    return 0
 }
 
 #------------------------------------------------------------
-# Main
+# Main installer stage
+#
+# IMPORTANT:
+# installer/installer.sh must call:
+#
+#     packages_install
+#
+# This is the official entry point for this module.
 #------------------------------------------------------------
 
 packages_install()
@@ -570,9 +681,11 @@ packages_install()
     packages_validate_target || \
         return 1
 
-    packages_init
+    packages_init || \
+        return 1
 
-    packages_load_system
+    packages_load_system || \
+        return 1
 
     packages_load_desktop || \
         return 1
@@ -604,4 +717,11 @@ packages_install()
 
     logger_info \
         "Package installation finished"
+
+    return 0
 }
+
+#============================================================
+# END
+#============================================================
+

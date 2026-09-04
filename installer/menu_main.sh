@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
 #============================================================
-#  Arch Installer
+# Arch Installer
 #------------------------------------------------------------
-#  installer/menu_main.sh
+# installer/menu_main.sh
 #
-#  Главное меню установщика.
+# Главное меню установщика.
 #
-#  Ответственность:
+# Ответственность:
 #   • отображение главного меню
 #   • навигация клавиатурой
 #   • запуск полной установки
@@ -16,19 +16,25 @@
 #   • открытие shell
 #   • выход
 #
+# Не содержит:
+#   • реализацию этапов установки
+#   • partition logic
+#   • filesystem logic
+#   • mount logic
+#   • package logic
+#   • bootloader logic
+#
 #============================================================
 
 #============================================================
 # LOAD GUARD
 #============================================================
-
 if [[ -n "${MENU_MAIN_SH_LOADED:-}" ]]
 then
     return 0 2>/dev/null || exit 0
 fi
-
-readonly MENU_MAIN_SH_LOADED=1
-
+MENU_MAIN_SH_LOADED=1
+export MENU_MAIN_SH_LOADED
 #============================================================
 # STATE
 #============================================================
@@ -38,7 +44,6 @@ MENU_MAIN_SELECTED="${MENU_MAIN_SELECTED:-0}"
 #============================================================
 # LOGGING
 #============================================================
-
 menu_main_log_info()
 {
     if declare -F logger_info >/dev/null 2>&1
@@ -53,7 +58,6 @@ menu_main_log_info()
 
     return 0
 }
-
 menu_main_log_warn()
 {
     if declare -F logger_warn >/dev/null 2>&1
@@ -68,7 +72,6 @@ menu_main_log_warn()
 
     return 0
 }
-
 menu_main_log_error()
 {
     if declare -F logger_error >/dev/null 2>&1
@@ -100,7 +103,9 @@ menu_main_check_controller()
         installer_run \
         installer_full_install \
         installer_run_stage \
-        installer_get_stage_title
+        installer_get_stage_title \
+        installer_check_stage \
+        installer_check_all_stages
     do
         if ! declare -F "$function_name" >/dev/null 2>&1
         then
@@ -131,30 +136,48 @@ menu_main_check_controller()
 
 menu_main_header()
 {
-    tui_clear || \
-        return 1
+    if ! tui_clear
+    then
+        menu_main_log_error \
+            "tui_clear() failed"
 
-    titlebar_draw \
-        "Arch Linux Installer" || \
         return 1
+    fi
 
-    tui_move \
+    if ! titlebar_draw \
+        "Arch Linux Installer"
+    then
+        menu_main_log_error \
+            "titlebar_draw() failed"
+
+        return 1
+    fi
+
+    if ! tui_move \
         3 \
-        5 || \
+        5
+    then
         return 1
+    fi
 
-    color_info \
-        "Arch Linux Installation System" || \
+    if ! color_info \
+        "Arch Linux Installation System"
+    then
         return 1
+    fi
 
-    tui_move \
+    if ! tui_move \
         4 \
-        5 || \
+        5
+    then
         return 1
+    fi
 
-    tui_print \
-        "Use Up/Down to navigate and Enter to select." || \
+    if ! tui_print \
+        "Use Up/Down to navigate and Enter to select."
+    then
         return 1
+    fi
 
     return 0
 }
@@ -165,7 +188,7 @@ menu_main_header()
 
 menu_main_read_event()
 {
-    TUI_EVENT="$EVENT_NONE"
+    TUI_EVENT="${EVENT_NONE:-NONE}"
     TUI_EVENT_CHAR=""
 
     if ! event_read
@@ -179,7 +202,7 @@ menu_main_read_event()
     menu_main_log_info \
         "EVENT=[${TUI_EVENT:-EMPTY}]"
 
-    if [[ "${TUI_EVENT:-}" == "$EVENT_CHAR" ]]
+    if [[ "${TUI_EVENT:-}" == "${EVENT_CHAR:-CHAR}" ]]
     then
         menu_main_log_info \
             "EVENT_CHAR=[${TUI_EVENT_CHAR:-EMPTY}]"
@@ -196,8 +219,10 @@ menu_main_wait()
 {
     while true
     do
-        menu_main_read_event || \
+        if ! menu_main_read_event
+        then
             return 1
+        fi
 
         case "${TUI_EVENT:-}" in
 
@@ -242,7 +267,10 @@ menu_main_operation_failed()
         return 0
     fi
 
-    tui_clear || true
+    if ! tui_clear
+    then
+        return 1
+    fi
 
     titlebar_draw \
         "$title" || true
@@ -287,71 +315,107 @@ menu_main_run_stage()
         return 1
     fi
 
-    title="$(
+    if ! title="$(
         installer_get_stage_title "$stage" 2>/dev/null
     )"
-
-    if [[ -z "$title" ]]
     then
         title="$stage"
     fi
 
+    [[ -n "$title" ]] || title="$stage"
+
     menu_main_log_info \
         "Running stage: ${stage}"
 
-    tui_clear || \
-        return 1
+    #--------------------------------------------------------
+    # Prepare screen
+    #--------------------------------------------------------
 
-    titlebar_draw \
-        "Arch Linux Installer" || \
+    if ! tui_clear
+    then
         return 1
+    fi
 
-    tui_move \
+    if ! titlebar_draw \
+        "Arch Linux Installer"
+    then
+        return 1
+    fi
+
+    if ! tui_move \
         5 \
-        5 || \
+        5
+    then
         return 1
+    fi
 
-    color_info \
-        "Starting: ${title}" || \
+    if ! color_info \
+        "Starting: ${title}"
+    then
         return 1
+    fi
 
-    tui_move \
+    if ! tui_move \
         7 \
-        5 || \
+        5
+    then
         return 1
+    fi
 
-    tui_print \
-        "Stage: ${stage}" || \
+    if ! tui_print \
+        "Stage: ${stage}"
+    then
         return 1
+    fi
 
-    tui_move \
+    if ! tui_move \
         9 \
-        5 || \
+        5
+    then
         return 1
+    fi
 
-    tui_print \
-        "Please wait..." || \
+    if ! tui_print \
+        "Please wait..."
+    then
         return 1
+    fi
 
     screen_refresh 2>/dev/null || true
+
+    #--------------------------------------------------------
+    # Call controller
+    #--------------------------------------------------------
 
     menu_main_log_info \
         "Calling installer_run_stage(${stage})"
 
-    installer_run_stage "$stage"
-    rc=$?
+    if installer_run_stage "$stage"
+    then
+        rc=0
+    else
+        rc=$?
+    fi
 
     menu_main_log_info \
         "installer_run_stage(${stage}) returned rc=${rc}"
+
+    #--------------------------------------------------------
+    # Failure
+    #--------------------------------------------------------
 
     if (( rc != 0 ))
     then
         menu_main_operation_failed \
             "$title" \
-            "Stage failed. Return code: ${rc}"
+            "Stage failed. Return code: ${rc}" || true
 
         return "$rc"
     fi
+
+    #--------------------------------------------------------
+    # Success
+    #--------------------------------------------------------
 
     menu_main_log_info \
         "Stage completed successfully: ${stage}"
@@ -373,12 +437,18 @@ menu_main_run_stage()
 menu_main_install()
 {
     local rc=0
+    local stage=""
+    local total=""
+    local progress=""
 
     menu_main_log_info \
         "============================================================"
 
     menu_main_log_info \
         "FULL INSTALLATION SELECTED"
+
+    menu_main_log_info \
+        "Checking installer_full_install()"
 
     #--------------------------------------------------------
     # Controller check
@@ -391,7 +461,7 @@ menu_main_install()
 
         menu_main_operation_failed \
             "Controller error" \
-            "installer_full_install() is not available."
+            "installer_full_install() is not available." || true
 
         return 127
     fi
@@ -400,51 +470,100 @@ menu_main_install()
         "installer_full_install() is available"
 
     #--------------------------------------------------------
-    # Display progress
+    # Read total stage count when possible
     #--------------------------------------------------------
 
-    tui_clear || \
-        return 1
+    if declare -p INSTALLER_STAGES >/dev/null 2>&1
+    then
+        total="${#INSTALLER_STAGES[@]}"
+    fi
 
-    titlebar_draw \
-        "Full Installation" || \
-        return 1
+    if [[ -z "$total" || ! "$total" =~ ^[0-9]+$ ]]
+    then
+        total="?"
+    fi
 
-    tui_move \
+    progress="Starting full installation (${total} stages)"
+
+    #--------------------------------------------------------
+    # Display
+    #--------------------------------------------------------
+
+    if ! tui_clear
+    then
+        return 1
+    fi
+
+    if ! titlebar_draw \
+        "Full Installation"
+    then
+        return 1
+    fi
+
+    if ! tui_move \
         5 \
-        5 || \
+        5
+    then
         return 1
+    fi
 
-    color_info \
-        "FULL INSTALLATION" || \
+    if ! color_info \
+        "FULL INSTALLATION"
+    then
         return 1
+    fi
 
-    tui_move \
+    if ! tui_move \
         7 \
-        5 || \
+        5
+    then
         return 1
+    fi
 
-    tui_print \
-        "All installation stages will be executed sequentially." || \
+    if ! tui_print \
+        "All installation stages will be executed sequentially."
+    then
         return 1
+    fi
 
-    tui_move \
+    if ! tui_move \
         9 \
-        5 || \
+        5
+    then
         return 1
+    fi
 
-    tui_print \
-        "Starting installer controller..." || \
+    if ! tui_print \
+        "$progress"
+    then
         return 1
+    fi
 
-    tui_move \
+    if ! tui_move \
         11 \
-        5 || \
+        5
+    then
         return 1
+    fi
 
-    tui_print \
-        "Please wait..." || \
+    if ! tui_print \
+        "Starting installer controller..."
+    then
         return 1
+    fi
+
+    if ! tui_move \
+        13 \
+        5
+    then
+        return 1
+    fi
+
+    if ! tui_print \
+        "Please wait..."
+    then
+        return 1
+    fi
 
     screen_refresh 2>/dev/null || true
 
@@ -458,8 +577,12 @@ menu_main_install()
     menu_main_log_info \
         "CALL=[installer_full_install]"
 
-    installer_full_install
-    rc=$?
+    if installer_full_install
+    then
+        rc=0
+    else
+        rc=$?
+    fi
 
     menu_main_log_info \
         "RETURN=[installer_full_install] RC=${rc}"
@@ -470,12 +593,20 @@ menu_main_install()
 
     if (( rc != 0 ))
     then
+        stage="${INSTALLER_STAGE:-unknown}"
+
         menu_main_log_error \
-            "FULL INSTALLATION FAILED: rc=${rc}"
+            "FULL INSTALLATION FAILED"
+
+        menu_main_log_error \
+            "FAILED STAGE=[${stage}]"
+
+        menu_main_log_error \
+            "RETURN CODE=[${rc}]"
 
         menu_main_operation_failed \
             "Installation failed" \
-            "Full installation failed. Return code: ${rc}"
+            "Stage: ${stage}\nReturn code: ${rc}" || true
 
         return "$rc"
     fi
@@ -561,6 +692,12 @@ menu_main_system_info()
                     print $2 " total, " \
                           $3 " used, " \
                           $7 " available"
+                    found=1
+                    exit
+                }
+                END {
+                    if (!found)
+                        print "unknown"
                 }
             '
         )"
@@ -572,69 +709,62 @@ menu_main_system_info()
     if command -v nproc >/dev/null 2>&1
     then
         cpu="$(
-            nproc 2>/dev/null ||
-            true
+            nproc 2>/dev/null || true
         )"
     fi
 
     [[ -n "$cpu" ]] || \
         cpu="unknown"
 
-    tui_clear || \
+    if ! tui_clear
+    then
         return 1
+    fi
 
-    titlebar_draw \
-        "System Information" || \
+    if ! titlebar_draw \
+        "System Information"
+    then
         return 1
+    fi
 
     tui_move 5 5 || return 1
 
     color_info \
-        "Kernel:" || \
-        return 1
+        "Kernel:" || return 1
 
     tui_print \
-        " ${kernel}" || \
-        return 1
+        " ${kernel}" || return 1
 
     tui_move 7 5 || return 1
 
     color_info \
-        "Architecture:" || \
-        return 1
+        "Architecture:" || return 1
 
     tui_print \
-        " ${arch}" || \
-        return 1
+        " ${arch}" || return 1
 
     tui_move 9 5 || return 1
 
     color_info \
-        "Memory:" || \
-        return 1
+        "Memory:" || return 1
 
     tui_print \
-        " ${memory}" || \
-        return 1
+        " ${memory}" || return 1
 
     tui_move 11 5 || return 1
 
     color_info \
-        "CPU cores:" || \
-        return 1
+        "CPU cores:" || return 1
 
     tui_print \
-        " ${cpu}" || \
-        return 1
+        " ${cpu}" || return 1
 
     tui_move \
         "$((TUI_ROWS - 2))" \
-        5 || \
-        return 1
+        5 || return 1
 
     color_info \
-        "Press Enter or Esc to return." || \
-        return 1
+        "Press Enter or Esc to return." || return 1
 
     screen_refresh 2>/dev/null || true
 
@@ -654,7 +784,11 @@ menu_main_shell()
     menu_main_log_info \
         "Opening interactive shell"
 
-    tui_restore || true
+    if ! tui_restore
+    then
+        menu_main_log_warn \
+            "tui_restore() returned failure"
+    fi
 
     printf '\n'
     printf 'Arch Installer shell\n'
@@ -730,10 +864,10 @@ menu_main_draw()
 
     local box_row=6
     local box_col=5
-    local box_height
-    local box_width
-    local row
-    local i
+    local box_height=0
+    local box_width=0
+    local row=0
+    local i=0
 
     if (( item_count == 0 ))
     then
@@ -758,27 +892,48 @@ menu_main_draw()
         selected=$((item_count - 1))
     fi
 
-    tui_update_size || true
+    if declare -F tui_update_size >/dev/null 2>&1
+    then
+        tui_update_size || true
+    fi
 
-    box_height=$((item_count + 4))
-    box_width=$((TUI_COLS - 10))
+    #--------------------------------------------------------
+    # Terminal dimensions
+    #--------------------------------------------------------
+
+    if [[ -n "${TUI_COLS:-}" && "$TUI_COLS" =~ ^[0-9]+$ ]]
+    then
+        box_width=$((TUI_COLS - 10))
+    else
+        box_width=60
+    fi
+
+    if [[ -n "${TUI_ROWS:-}" && "$TUI_ROWS" =~ ^[0-9]+$ ]]
+    then
+        box_height=$((item_count + 4))
+
+        if (( box_height > TUI_ROWS - 2 ))
+        then
+            box_height=$((TUI_ROWS - 2))
+        fi
+    else
+        box_height=$((item_count + 4))
+    fi
 
     if (( box_width < 40 ))
     then
         box_width=40
     fi
 
-    if (( box_width > TUI_COLS - 2 ))
+    if [[ -n "${TUI_COLS:-}" && "$TUI_COLS" =~ ^[0-9]+$ ]]
     then
-        box_width=$((TUI_COLS - 2))
+        if (( box_width > TUI_COLS - 2 ))
+        then
+            box_width=$((TUI_COLS - 2))
+        fi
     fi
 
-    if (( box_height > TUI_ROWS - 2 ))
-    then
-        box_height=$((TUI_ROWS - 2))
-    fi
-
-    if (( box_width < 2 || box_height < 2 ))
+    if (( box_height < 2 || box_width < 2 ))
     then
         menu_main_log_error \
             "Terminal is too small for main menu"
@@ -786,43 +941,88 @@ menu_main_draw()
         return 1
     fi
 
-    menu_main_header || \
-        return 1
+    #--------------------------------------------------------
+    # Header
+    #--------------------------------------------------------
 
-    draw_box \
+    if ! menu_main_header
+    then
+        return 1
+    fi
+
+    #--------------------------------------------------------
+    # Main box
+    #
+    # Existing draw_box API in this project uses:
+    #
+    #   draw_box row col height width title
+    #
+    #--------------------------------------------------------
+
+    if ! draw_box \
         "$box_row" \
         "$box_col" \
         "$box_height" \
         "$box_width" \
-        "Main Menu" || \
+        "Main Menu"
+    then
+        menu_main_log_error \
+            "draw_box() failed"
+
         return 1
+    fi
+
+    #--------------------------------------------------------
+    # Menu items
+    #--------------------------------------------------------
 
     row=$((box_row + 2))
 
     for ((i = 0; i < item_count; i++))
     do
-        tui_move \
+        # Don't draw beyond available terminal area.
+        if [[ -n "${TUI_ROWS:-}" && "$TUI_ROWS" =~ ^[0-9]+$ ]]
+        then
+            if (( row >= TUI_ROWS - 1 ))
+            then
+                break
+            fi
+        fi
+
+        if ! tui_move \
             "$row" \
-            "$((box_col + 3))" || \
+            "$((box_col + 3))"
+        then
             return 1
+        fi
 
         if (( i == selected ))
         then
-            color_selected \
-                "> ${items_ref[i]}" || \
+            if ! color_selected \
+                "> ${items_ref[i]}"
+            then
                 return 1
+            fi
         else
-            tui_print \
-                "  ${items_ref[i]}" || \
+            if ! tui_print \
+                "  ${items_ref[i]}"
+            then
                 return 1
+            fi
         fi
 
         row=$((row + 1))
     done
 
-    statusbar_draw \
-        "↑↓ Navigate   Home/End Move   Enter Select   Esc Exit" || \
+    #--------------------------------------------------------
+    # Status bar
+    #--------------------------------------------------------
+
+    if ! statusbar_draw \
+        "↑↓ Navigate   Home/End Move   Enter Select   Esc Exit"
+    then
         return 1
+    fi
 
     screen_refresh 2>/dev/null || true
 
@@ -865,7 +1065,8 @@ menu_main()
     then
         menu_main_operation_failed \
             "Controller error" \
-            "Required installer controller functions are not loaded." || true
+            "Required installer controller functions are not loaded." \
+            || true
 
         return 1
     fi
@@ -899,7 +1100,7 @@ menu_main()
     while true
     do
         #----------------------------------------------------
-        # Draw menu
+        # Draw
         #----------------------------------------------------
 
         if ! menu_main_draw \
@@ -913,7 +1114,7 @@ menu_main()
         fi
 
         #----------------------------------------------------
-        # Read event
+        # Read keyboard
         #----------------------------------------------------
 
         if ! menu_main_read_event
@@ -925,7 +1126,7 @@ menu_main()
             "EVENT=[${TUI_EVENT:-EMPTY}] SELECTED=[${selected}] ITEM=[${items[selected]}]"
 
         #====================================================
-        # Dispatch
+        # EVENT DISPATCH
         #====================================================
 
         case "${TUI_EVENT:-}" in
@@ -1006,8 +1207,6 @@ menu_main()
 
                 MENU_MAIN_SELECTED="$selected"
 
-                # IMPORTANT:
-                # Always reset result before a new action.
                 operation_rc=0
 
                 menu_main_log_info \
@@ -1023,7 +1222,7 @@ menu_main()
                     "SELECTED ITEM=[${items[selected]}]"
 
                 #============================================
-                # FULL INSTALLATION
+                # 0 - FULL INSTALLATION
                 #============================================
 
                 if (( selected == 0 ))
@@ -1034,15 +1233,19 @@ menu_main()
                     menu_main_log_info \
                         "DISPATCH -> menu_main_install"
 
-                    menu_main_install
-                    operation_rc=$?
+                    if menu_main_install
+                    then
+                        operation_rc=0
+                    else
+                        operation_rc=$?
+                    fi
 
                     menu_main_log_info \
                         "DISPATCH <- menu_main_install RC=${operation_rc}"
                 fi
 
                 #============================================
-                # PARTITION
+                # 1 - PARTITION
                 #============================================
 
                 if (( selected == 1 ))
@@ -1050,15 +1253,19 @@ menu_main()
                     menu_main_log_info \
                         "ACTION=[PARTITION]"
 
-                    menu_main_partition
-                    operation_rc=$?
+                    if menu_main_partition
+                    then
+                        operation_rc=0
+                    else
+                        operation_rc=$?
+                    fi
 
                     menu_main_log_info \
                         "PARTITION RESULT RC=${operation_rc}"
                 fi
 
                 #============================================
-                # FILESYSTEM
+                # 2 - FILESYSTEM
                 #============================================
 
                 if (( selected == 2 ))
@@ -1066,15 +1273,19 @@ menu_main()
                     menu_main_log_info \
                         "ACTION=[FILESYSTEM]"
 
-                    menu_main_filesystem
-                    operation_rc=$?
+                    if menu_main_filesystem
+                    then
+                        operation_rc=0
+                    else
+                        operation_rc=$?
+                    fi
 
                     menu_main_log_info \
                         "FILESYSTEM RESULT RC=${operation_rc}"
                 fi
 
                 #============================================
-                # MOUNT
+                # 3 - MOUNT
                 #============================================
 
                 if (( selected == 3 ))
@@ -1082,15 +1293,19 @@ menu_main()
                     menu_main_log_info \
                         "ACTION=[MOUNT]"
 
-                    menu_main_mount
-                    operation_rc=$?
+                    if menu_main_mount
+                    then
+                        operation_rc=0
+                    else
+                        operation_rc=$?
+                    fi
 
                     menu_main_log_info \
                         "MOUNT RESULT RC=${operation_rc}"
                 fi
 
                 #============================================
-                # PACKAGES
+                # 4 - PACKAGES
                 #============================================
 
                 if (( selected == 4 ))
@@ -1098,15 +1313,19 @@ menu_main()
                     menu_main_log_info \
                         "ACTION=[PACKAGES]"
 
-                    menu_main_packages
-                    operation_rc=$?
+                    if menu_main_packages
+                    then
+                        operation_rc=0
+                    else
+                        operation_rc=$?
+                    fi
 
                     menu_main_log_info \
                         "PACKAGES RESULT RC=${operation_rc}"
                 fi
 
                 #============================================
-                # BOOTLOADER
+                # 5 - BOOTLOADER
                 #============================================
 
                 if (( selected == 5 ))
@@ -1114,15 +1333,19 @@ menu_main()
                     menu_main_log_info \
                         "ACTION=[BOOTLOADER]"
 
-                    menu_main_bootloader
-                    operation_rc=$?
+                    if menu_main_bootloader
+                    then
+                        operation_rc=0
+                    else
+                        operation_rc=$?
+                    fi
 
                     menu_main_log_info \
                         "BOOTLOADER RESULT RC=${operation_rc}"
                 fi
 
                 #============================================
-                # SYSTEM INFORMATION
+                # 6 - SYSTEM INFORMATION
                 #============================================
 
                 if (( selected == 6 ))
@@ -1130,15 +1353,19 @@ menu_main()
                     menu_main_log_info \
                         "ACTION=[SYSTEM_INFORMATION]"
 
-                    menu_main_system_info
-                    operation_rc=$?
+                    if menu_main_system_info
+                    then
+                        operation_rc=0
+                    else
+                        operation_rc=$?
+                    fi
 
                     menu_main_log_info \
                         "SYSTEM_INFORMATION RESULT RC=${operation_rc}"
                 fi
 
                 #============================================
-                # SHELL
+                # 7 - SHELL
                 #============================================
 
                 if (( selected == 7 ))
@@ -1146,15 +1373,19 @@ menu_main()
                     menu_main_log_info \
                         "ACTION=[SHELL]"
 
-                    menu_main_shell
-                    operation_rc=$?
+                    if menu_main_shell
+                    then
+                        operation_rc=0
+                    else
+                        operation_rc=$?
+                    fi
 
                     menu_main_log_info \
                         "SHELL RESULT RC=${operation_rc}"
                 fi
 
                 #============================================
-                # EXIT
+                # 8 - EXIT
                 #============================================
 
                 if (( selected == 8 ))
@@ -1178,9 +1409,9 @@ menu_main()
                     operation_rc=1
                 fi
 
-                #============================================
-                # RESULT
-                #============================================
+                #------------------------------------------------
+                # Action result
+                #------------------------------------------------
 
                 if (( operation_rc == 0 ))
                 then
@@ -1222,6 +1453,7 @@ menu_main()
             #------------------------------------------------
 
             "$EVENT_NONE"|"")
+
                 ;;
 
             #------------------------------------------------
@@ -1236,7 +1468,7 @@ menu_main()
                 ;;
 
             #------------------------------------------------
-            # OTHER
+            # UNKNOWN
             #------------------------------------------------
 
             *)
@@ -1256,5 +1488,6 @@ menu_main()
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]
 then
     menu_main
+
     exit $?
 fi

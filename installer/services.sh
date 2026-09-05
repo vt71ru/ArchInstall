@@ -5,23 +5,7 @@
 #------------------------------------------------------------
 # installer/services.sh
 #
-# Настройка системных служб установленной системы.
-#
-# Ответственность:
-#   • проверка /mnt
-#   • загрузка конфигурации
-#   • проверка hostname / SSH
-#   • настройка /etc/hostname
-#   • настройка /etc/hosts
-#   • выбор сетевой службы
-#   • включение SSH
-#   • установка graphical.target
-#   • проверка результата
-#   • сохранение информации о настройке
-#
-# ВАЖНО:
-#   Службы внутри /mnt НЕ запускаются.
-#   Выполняется только подготовка установленной системы.
+# Stage: services
 #============================================================
 
 #============================================================
@@ -33,26 +17,20 @@ then
     return 0 2>/dev/null || exit 0
 fi
 
-ARCH_INSTALLER_SERVICES_SH_LOADED=1
-
 #============================================================
-# Constants
+# State
 #============================================================
 
-readonly SERVICES_TARGET="${SERVICES_TARGET:-/mnt}"
-readonly SERVICES_CONFIG_FILE="${SERVICES_CONFIG_FILE:-${SERVICES_TARGET}/etc/arch-installer-services.conf}"
+SERVICES_TARGET="${SERVICES_TARGET:-/mnt}"
+SERVICES_CONFIG_FILE="${SERVICES_CONFIG_FILE:-${SERVICES_TARGET}/etc/arch-installer-services.conf}"
+
+SERVICES_HOSTNAME="${SERVICES_HOSTNAME:-archlinux}"
+SERVICES_ENABLE_SSH="${SERVICES_ENABLE_SSH:-1}"
+SERVICES_NETWORK_SERVICE="${SERVICES_NETWORK_SERVICE:-}"
+SERVICES_GRAPHICAL_TARGET="${SERVICES_GRAPHICAL_TARGET:-graphical.target}"
 
 #============================================================
-# Runtime state
-#============================================================
-
-SERVICES_HOSTNAME=""
-SERVICES_ENABLE_SSH=1
-SERVICES_NETWORK_SERVICE=""
-SERVICES_GRAPHICAL_TARGET="graphical.target"
-
-#============================================================
-# Logging compatibility
+# Logging
 #============================================================
 
 services_log_info()
@@ -60,10 +38,11 @@ services_log_info()
     if declare -F logger_info >/dev/null 2>&1
     then
         logger_info "$@"
-        return $?
+    else
+        printf '[INFO] %s\n' "$*" >&2
     fi
 
-    printf '[INFO] %s\n' "$*" >&2
+    return 0
 }
 
 services_log_warn()
@@ -71,10 +50,11 @@ services_log_warn()
     if declare -F logger_warn >/dev/null 2>&1
     then
         logger_warn "$@"
-        return $?
+    else
+        printf '[WARN] %s\n' "$*" >&2
     fi
 
-    printf '[WARN] %s\n' "$*" >&2
+    return 0
 }
 
 services_log_error()
@@ -82,44 +62,24 @@ services_log_error()
     if declare -F logger_error >/dev/null 2>&1
     then
         logger_error "$@"
-        return $?
+    else
+        printf '[ERROR] %s\n' "$*" >&2
     fi
 
-    printf '[ERROR] %s\n' "$*" >&2
+    return 0
 }
 
 #============================================================
-# Target checks
+# Target
 #============================================================
 
 services_check_target()
 {
-    services_log_info \
-        "Checking target system: ${SERVICES_TARGET}"
+    services_log_info "Checking target: ${SERVICES_TARGET}"
 
-    if [[ ! -d "$SERVICES_TARGET" ]]
-    then
-        services_log_error \
-            "Target directory does not exist: ${SERVICES_TARGET}"
-
-        return 1
-    fi
-
-    if [[ ! -d "${SERVICES_TARGET}/etc" ]]
-    then
-        services_log_error \
-            "Target /etc does not exist: ${SERVICES_TARGET}/etc"
-
-        return 1
-    fi
-
-    if [[ ! -d "${SERVICES_TARGET}/usr" ]]
-    then
-        services_log_error \
-            "Target /usr does not exist: ${SERVICES_TARGET}/usr"
-
-        return 1
-    fi
+    [[ -d "$SERVICES_TARGET" ]] || return 1
+    [[ -d "${SERVICES_TARGET}/etc" ]] || return 1
+    [[ -d "${SERVICES_TARGET}/usr" ]] || return 1
 
     return 0
 }
@@ -130,84 +90,14 @@ services_check_target()
 
 services_load_config()
 {
-    services_log_info \
-        "Loading services configuration"
-
-    #--------------------------------------------------------
-    # Hostname
-    #--------------------------------------------------------
-
-    SERVICES_HOSTNAME=""
-
     if declare -p CONFIG >/dev/null 2>&1
     then
-        if [[ -n "${CONFIG[HOSTNAME]:-}" ]]
-        then
-            SERVICES_HOSTNAME="${CONFIG[HOSTNAME]}"
-        elif [[ -n "${CONFIG[hostname]:-}" ]]
-        then
-            SERVICES_HOSTNAME="${CONFIG[hostname]}"
-        fi
+        SERVICES_HOSTNAME="${CONFIG[HOSTNAME]:-${CONFIG[hostname]:-${SERVICES_HOSTNAME}}}"
+        SERVICES_ENABLE_SSH="${CONFIG[SSH_ENABLED]:-${CONFIG[ssh_enabled]:-${SERVICES_ENABLE_SSH}}}"
+        SERVICES_NETWORK_SERVICE="${CONFIG[NETWORK_SERVICE]:-${CONFIG[network_service]:-${SERVICES_NETWORK_SERVICE}}}"
     fi
 
-    if [[ -z "$SERVICES_HOSTNAME" ]]
-    then
-        if [[ -n "${HOSTNAME:-}" ]]
-        then
-            SERVICES_HOSTNAME="$HOSTNAME"
-        fi
-    fi
-
-    if [[ -z "$SERVICES_HOSTNAME" ]]
-    then
-        SERVICES_HOSTNAME="archlinux"
-    fi
-
-    #--------------------------------------------------------
-    # SSH
-    #--------------------------------------------------------
-
-    SERVICES_ENABLE_SSH=1
-
-    if declare -p CONFIG >/dev/null 2>&1
-    then
-        if [[ "${CONFIG[SSH_ENABLED]:-1}" == "0" ]]
-        then
-            SERVICES_ENABLE_SSH=0
-        elif [[ "${CONFIG[ssh_enabled]:-1}" == "0" ]]
-        then
-            SERVICES_ENABLE_SSH=0
-        fi
-    fi
-
-    #--------------------------------------------------------
-    # Network service
-    #--------------------------------------------------------
-
-    SERVICES_NETWORK_SERVICE=""
-
-    if declare -p CONFIG >/dev/null 2>&1
-    then
-        if [[ -n "${CONFIG[NETWORK_SERVICE]:-}" ]]
-        then
-            SERVICES_NETWORK_SERVICE="${CONFIG[NETWORK_SERVICE]}"
-        elif [[ -n "${CONFIG[network_service]:-}" ]]
-        then
-            SERVICES_NETWORK_SERVICE="${CONFIG[network_service]}"
-        fi
-    fi
-
-    services_log_info \
-        "Hostname: ${SERVICES_HOSTNAME}"
-
-    services_log_info \
-        "SSH enabled: ${SERVICES_ENABLE_SSH}"
-
-    if [[ -n "$SERVICES_NETWORK_SERVICE" ]]
-    then
-        services_log_info \
-            "Requested network service: ${SERVICES_NETWORK_SERVICE}"
-    fi
+    [[ -n "$SERVICES_HOSTNAME" ]] || SERVICES_HOSTNAME="archlinux"
 
     return 0
 }
@@ -218,104 +108,25 @@ services_load_config()
 
 services_validate_hostname()
 {
-    services_log_info \
-        "Validating hostname"
+    [[ -n "$SERVICES_HOSTNAME" ]] || return 1
 
-    if [[ -z "$SERVICES_HOSTNAME" ]]
-    then
-        services_log_error \
-            "Hostname is empty"
+    ((${#SERVICES_HOSTNAME} <= 253)) || return 1
 
+    [[ "$SERVICES_HOSTNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]] ||
         return 1
-    fi
-
-    if ((${#SERVICES_HOSTNAME} > 253))
-    then
-        services_log_error \
-            "Hostname is too long"
-
-        return 1
-    fi
-
-    if [[ "$SERVICES_HOSTNAME" == .* ||
-          "$SERVICES_HOSTNAME" == *. ||
-          "$SERVICES_HOSTNAME" == *..* ]]
-    then
-        services_log_error \
-            "Invalid hostname: ${SERVICES_HOSTNAME}"
-
-        return 1
-    fi
-
-    if [[ ! "$SERVICES_HOSTNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]]
-    then
-        services_log_error \
-            "Invalid hostname: ${SERVICES_HOSTNAME}"
-
-        return 1
-    fi
-
-    if [[ "$SERVICES_HOSTNAME" =~ (^|[-.])[.-]($|[-.]) ]]
-    then
-        services_log_error \
-            "Invalid hostname: ${SERVICES_HOSTNAME}"
-
-        return 1
-    fi
 
     return 0
 }
 
 services_validate_ssh()
 {
-    services_log_info \
-        "Validating SSH configuration"
-
-    if [[ "$SERVICES_ENABLE_SSH" != "1" ]]
-    then
-        services_log_info \
-            "SSH configuration disabled"
-
-        return 0
-    fi
-
-    if [[ ! -x "${SERVICES_TARGET}/usr/bin/sshd" ]]
-    then
-        services_log_warn \
-            "sshd is not installed in target system"
-
-        SERVICES_ENABLE_SSH=0
-
-        return 0
-    fi
-
-    if [[ ! -f "${SERVICES_TARGET}/etc/ssh/sshd_config" ]]
-    then
-        services_log_info \
-            "Creating default sshd_config"
-
-        mkdir -p \
-            "${SERVICES_TARGET}/etc/ssh" || \
-            return 1
-
-        cat > "${SERVICES_TARGET}/etc/ssh/sshd_config" <<'EOF'
-# Arch Installer generated SSH configuration
-
-Include /etc/ssh/sshd_config.d/*.conf
-
-Port 22
-AddressFamily any
-
-PermitRootLogin prohibit-password
-PasswordAuthentication yes
-KbdInteractiveAuthentication yes
-UsePAM yes
-
-X11Forwarding yes
-PrintMotd no
-Subsystem sftp /usr/lib/ssh/sftp-server
-EOF
-    fi
+    case "$SERVICES_ENABLE_SSH" in
+        0|1)
+            ;;
+        *)
+            SERVICES_ENABLE_SSH=1
+            ;;
+    esac
 
     return 0
 }
@@ -326,17 +137,9 @@ EOF
 
 services_configure_hostname()
 {
-    local hostname_file="${SERVICES_TARGET}/etc/hostname"
-
-    services_log_info \
-        "Configuring hostname"
-
-    printf '%s\n' \
-        "$SERVICES_HOSTNAME" \
-        > "$hostname_file" || \
+    printf '%s\n' "$SERVICES_HOSTNAME" \
+        > "${SERVICES_TARGET}/etc/hostname" ||
         return 1
-
-    chmod 0644 "$hostname_file" 2>/dev/null || true
 
     return 0
 }
@@ -348,99 +151,63 @@ services_configure_hostname()
 services_configure_hosts()
 {
     local hosts_file="${SERVICES_TARGET}/etc/hosts"
-    local current_hosts=""
 
-    services_log_info \
-        "Configuring /etc/hosts"
-
-    if [[ -f "$hosts_file" ]]
-    then
-        current_hosts="$(cat "$hosts_file")" || \
-            return 1
-    fi
-
-    #--------------------------------------------------------
-    # Remove previously generated local hostname entries
-    #--------------------------------------------------------
-
-    if [[ -n "$current_hosts" ]]
-    then
-        current_hosts="$(
-            printf '%s\n' "$current_hosts" |
-                grep -v \
-                    -E \
-                    "^[[:space:]]*127\.0\.1\.1[[:space:]]+${SERVICES_HOSTNAME}([[:space:]]|$)" \
-                || true
-        )"
-    fi
-
-    #--------------------------------------------------------
-    # Ensure localhost entries
-    #--------------------------------------------------------
-
-    if ! printf '%s\n' "$current_hosts" |
-        grep -qE '^[[:space:]]*127\.0\.0\.1[[:space:]]+localhost([[:space:]]|$)'
-    then
-        current_hosts+=$'\n127.0.0.1\tlocalhost'
-    fi
-
-    if ! printf '%s\n' "$current_hosts" |
-        grep -qE '^[[:space:]]*::1[[:space:]]+localhost([[:space:]]|$)'
-    then
-        current_hosts+=$'\n::1\tlocalhost'
-    fi
-
-    #--------------------------------------------------------
-    # Local hostname
-    #--------------------------------------------------------
-
-    if ! printf '%s\n' "$current_hosts" |
-        grep -qE \
-            "^[[:space:]]*127\.0\.1\.1[[:space:]]+${SERVICES_HOSTNAME}([[:space:]]|$)"
-    then
-        current_hosts+=$'\n127.0.1.1\t'"$SERVICES_HOSTNAME"
-    fi
-
-    #--------------------------------------------------------
-    # Write
-    #--------------------------------------------------------
-
-    printf '%s\n' "$current_hosts" |
-        sed '/^[[:space:]]*$/d' |
-        awk '!seen[$0]++' \
-        > "$hosts_file" || \
-        return 1
-
-    chmod 0644 "$hosts_file" 2>/dev/null || true
+    cat > "$hosts_file" <<EOF
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   ${SERVICES_HOSTNAME}
+EOF
 
     return 0
 }
 
 #============================================================
-# Network service
+# Network
 #============================================================
 
 services_network()
 {
-    local network_manager=""
+    local wants_dir=""
 
-    services_log_info \
-        "Configuring network service"
+    wants_dir="${SERVICES_TARGET}/etc/systemd/system/multi-user.target.wants"
 
-    #--------------------------------------------------------
-    # Explicit configuration
-    #--------------------------------------------------------
+    mkdir -p "$wants_dir" || return 1
+
+    if [[ -z "$SERVICES_NETWORK_SERVICE" ]]
+    then
+        if [[ -e "${SERVICES_TARGET}/usr/lib/systemd/system/NetworkManager.service" ]]
+        then
+            SERVICES_NETWORK_SERVICE="NetworkManager"
+        elif [[ -e "${SERVICES_TARGET}/usr/lib/systemd/system/systemd-networkd.service" ]]
+        then
+            SERVICES_NETWORK_SERVICE="systemd-networkd"
+        else
+            SERVICES_NETWORK_SERVICE=""
+        fi
+    fi
 
     case "$SERVICES_NETWORK_SERVICE" in
-        NetworkManager|networkmanager|network-manager)
-            network_manager="NetworkManager"
+
+        NetworkManager)
+            if [[ -e "${SERVICES_TARGET}/usr/lib/systemd/system/NetworkManager.service" ]]
+            then
+                ln -sf \
+                    /usr/lib/systemd/system/NetworkManager.service \
+                    "${wants_dir}/NetworkManager.service"
+            fi
             ;;
 
-        systemd-networkd|systemd_networkd|networkd)
-            network_manager="systemd-networkd"
+        systemd-networkd)
+            if [[ -e "${SERVICES_TARGET}/usr/lib/systemd/system/systemd-networkd.service" ]]
+            then
+                ln -sf \
+                    /usr/lib/systemd/system/systemd-networkd.service \
+                    "${wants_dir}/systemd-networkd.service"
+            fi
             ;;
 
         "")
+            services_log_warn "No network service found"
             ;;
 
         *)
@@ -448,85 +215,6 @@ services_network()
                 "Unknown network service: ${SERVICES_NETWORK_SERVICE}"
             ;;
     esac
-
-    #--------------------------------------------------------
-    # Automatic detection
-    #--------------------------------------------------------
-
-    if [[ -z "$network_manager" ]]
-    then
-        if [[ -x "${SERVICES_TARGET}/usr/bin/NetworkManager" ]]
-        then
-            network_manager="NetworkManager"
-        elif [[ -x "${SERVICES_TARGET}/usr/lib/systemd/systemd-networkd" ]]
-        then
-            network_manager="systemd-networkd"
-        fi
-    fi
-
-    #--------------------------------------------------------
-    # NetworkManager
-    #--------------------------------------------------------
-
-    if [[ "$network_manager" == "NetworkManager" ]]
-    then
-        if [[ -e "${SERVICES_TARGET}/usr/lib/systemd/system/NetworkManager.service" ]]
-        then
-            mkdir -p \
-                "${SERVICES_TARGET}/etc/systemd/system/multi-user.target.wants" \
-                || return 1
-
-            ln -sf \
-                /usr/lib/systemd/system/NetworkManager.service \
-                "${SERVICES_TARGET}/etc/systemd/system/multi-user.target.wants/NetworkManager.service" \
-                || return 1
-
-            SERVICES_NETWORK_SERVICE="NetworkManager"
-
-            services_log_info \
-                "NetworkManager enabled"
-
-            return 0
-        fi
-
-        services_log_warn \
-            "NetworkManager binary exists but service file was not found"
-    fi
-
-    #--------------------------------------------------------
-    # systemd-networkd
-    #--------------------------------------------------------
-
-    if [[ "$network_manager" == "systemd-networkd" ]]
-    then
-        if [[ -e "${SERVICES_TARGET}/usr/lib/systemd/system/systemd-networkd.service" ]]
-        then
-            mkdir -p \
-                "${SERVICES_TARGET}/etc/systemd/system/multi-user.target.wants" \
-                || return 1
-
-            ln -sf \
-                /usr/lib/systemd/system/systemd-networkd.service \
-                "${SERVICES_TARGET}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service" \
-                || return 1
-
-            SERVICES_NETWORK_SERVICE="systemd-networkd"
-
-            services_log_info \
-                "systemd-networkd enabled"
-
-            return 0
-        fi
-    fi
-
-    #--------------------------------------------------------
-    # No network manager
-    #--------------------------------------------------------
-
-    services_log_warn \
-        "No supported network service found"
-
-    SERVICES_NETWORK_SERVICE=""
 
     return 0
 }
@@ -537,41 +225,25 @@ services_network()
 
 services_ssh()
 {
-    local ssh_wants_dir=""
-
-    services_log_info \
-        "Configuring SSH service"
+    local wants_dir="${SERVICES_TARGET}/etc/systemd/system/multi-user.target.wants"
 
     if [[ "$SERVICES_ENABLE_SSH" != "1" ]]
     then
-        services_log_info \
-            "SSH service configuration skipped"
-
         return 0
     fi
 
-    if [[ ! -f "${SERVICES_TARGET}/usr/lib/systemd/system/sshd.service" ]]
+    if [[ ! -e "${SERVICES_TARGET}/usr/lib/systemd/system/sshd.service" ]]
     then
-        services_log_warn \
-            "sshd.service not found"
-
-        SERVICES_ENABLE_SSH=0
-
+        services_log_warn "sshd.service not found"
         return 0
     fi
 
-    ssh_wants_dir="${SERVICES_TARGET}/etc/systemd/system/multi-user.target.wants"
-
-    mkdir -p "$ssh_wants_dir" || \
-        return 1
+    mkdir -p "$wants_dir" || return 1
 
     ln -sf \
         /usr/lib/systemd/system/sshd.service \
-        "${ssh_wants_dir}/sshd.service" || \
+        "${wants_dir}/sshd.service" ||
         return 1
-
-    services_log_info \
-        "SSH service enabled"
 
     return 0
 }
@@ -582,40 +254,17 @@ services_ssh()
 
 services_graphical_target()
 {
-    local target_dir=""
-    local target_link=""
+    local system_dir="${SERVICES_TARGET}/etc/systemd/system"
+    local target="${system_dir}/default.target"
 
-    services_log_info \
-        "Configuring systemd graphical target"
+    mkdir -p "$system_dir" || return 1
 
-    target_dir="${SERVICES_TARGET}/etc/systemd/system"
-    target_link="${target_dir}/default.target"
-
-    mkdir -p "$target_dir" || \
-        return 1
-
-    #--------------------------------------------------------
-    # Remove old default target
-    #--------------------------------------------------------
-
-    if [[ -e "$target_link" ||
-          -L "$target_link" ]]
-    then
-        rm -f "$target_link" || \
-            return 1
-    fi
-
-    #--------------------------------------------------------
-    # Select graphical target
-    #--------------------------------------------------------
+    rm -f "$target" || return 1
 
     ln -sf \
         "/usr/lib/systemd/system/${SERVICES_GRAPHICAL_TARGET}" \
-        "$target_link" || \
+        "$target" ||
         return 1
-
-    services_log_info \
-        "Default target set to ${SERVICES_GRAPHICAL_TARGET}"
 
     return 0
 }
@@ -626,310 +275,128 @@ services_graphical_target()
 
 services_check_hostname()
 {
-    local hostname_file="${SERVICES_TARGET}/etc/hostname"
-    local actual_hostname=""
+    local file="${SERVICES_TARGET}/etc/hostname"
 
-    services_log_info \
-        "Checking hostname configuration"
+    [[ -f "$file" ]] || return 1
 
-    if [[ ! -f "$hostname_file" ]]
-    then
-        services_log_error \
-            "Hostname file missing"
-
+    [[ "$(cat "$file")" == "$SERVICES_HOSTNAME" ]] ||
         return 1
-    fi
-
-    actual_hostname="$(tr -d '\r\n' < "$hostname_file")" || \
-        return 1
-
-    if [[ "$actual_hostname" != "$SERVICES_HOSTNAME" ]]
-    then
-        services_log_error \
-            "Hostname mismatch"
-
-        services_log_error \
-            "Expected: ${SERVICES_HOSTNAME}"
-
-        services_log_error \
-            "Actual:   ${actual_hostname}"
-
-        return 1
-    fi
 
     return 0
 }
 
 services_check_hosts()
 {
-    local hosts_file="${SERVICES_TARGET}/etc/hosts"
+    local file="${SERVICES_TARGET}/etc/hosts"
 
-    services_log_info \
-        "Checking /etc/hosts"
+    [[ -f "$file" ]] || return 1
 
-    if [[ ! -f "$hosts_file" ]]
-    then
-        services_log_error \
-            "/etc/hosts does not exist"
-
+    grep -qE \
+        '^[[:space:]]*127\.0\.0\.1[[:space:]]+localhost' \
+        "$file" ||
         return 1
-    fi
-
-    if ! grep -qE \
-        '^[[:space:]]*127\.0\.0\.1[[:space:]]+localhost([[:space:]]|$)' \
-        "$hosts_file"
-    then
-        services_log_error \
-            "127.0.0.1 localhost entry missing"
-
-        return 1
-    fi
-
-    if ! grep -qE \
-        '^[[:space:]]*::1[[:space:]]+localhost([[:space:]]|$)' \
-        "$hosts_file"
-    then
-        services_log_error \
-            "::1 localhost entry missing"
-
-        return 1
-    fi
-
-    if ! grep -qE \
-        "^[[:space:]]*127\.0\.1\.1[[:space:]]+${SERVICES_HOSTNAME}([[:space:]]|$)" \
-        "$hosts_file"
-    then
-        services_log_error \
-            "127.0.1.1 hostname entry missing"
-
-        return 1
-    fi
 
     return 0
 }
 
 services_check_network()
 {
-    local manager=""
-
-    services_log_info \
-        "Checking network service"
-
-    #--------------------------------------------------------
-    # No service selected is allowed.
-    #--------------------------------------------------------
-
-    if [[ -z "$SERVICES_NETWORK_SERVICE" ]]
-    then
-        services_log_warn \
-            "No network service configured"
-
-        return 0
-    fi
-
-    manager="$SERVICES_NETWORK_SERVICE"
-
-    case "$manager" in
+    case "$SERVICES_NETWORK_SERVICE" in
         NetworkManager)
-            if [[ ! -e \
+            [[ -e \
                 "${SERVICES_TARGET}/etc/systemd/system/multi-user.target.wants/NetworkManager.service" ]]
-            then
-                services_log_error \
-                    "NetworkManager is not enabled"
-
-                return 1
-            fi
             ;;
 
         systemd-networkd)
-            if [[ ! -e \
+            [[ -e \
                 "${SERVICES_TARGET}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service" ]]
-            then
-                services_log_error \
-                    "systemd-networkd is not enabled"
+            ;;
 
-                return 1
-            fi
+        "")
+            return 0
             ;;
 
         *)
-            services_log_warn \
-                "Network verification skipped for: ${manager}"
+            return 0
             ;;
     esac
-
-    return 0
 }
 
 services_check_ssh()
 {
-    services_log_info \
-        "Checking SSH service"
-
     if [[ "$SERVICES_ENABLE_SSH" != "1" ]]
     then
-        services_log_info \
-            "SSH disabled"
-
         return 0
     fi
 
-    if [[ ! -e \
+    [[ -e \
         "${SERVICES_TARGET}/etc/systemd/system/multi-user.target.wants/sshd.service" ]]
-    then
-        services_log_error \
-            "sshd.service is not enabled"
-
-        return 1
-    fi
-
-    return 0
 }
 
 services_check_target_mode()
 {
-    local target_link="${SERVICES_TARGET}/etc/systemd/system/default.target"
+    local target="${SERVICES_TARGET}/etc/systemd/system/default.target"
     local expected="/usr/lib/systemd/system/${SERVICES_GRAPHICAL_TARGET}"
     local actual=""
 
-    services_log_info \
-        "Checking systemd default target"
+    [[ -L "$target" ]] || return 1
 
-    if [[ ! -L "$target_link" ]]
-    then
-        services_log_error \
-            "default.target is not a symbolic link"
+    actual="$(readlink "$target")" || return 1
 
-        return 1
-    fi
-
-    actual="$(readlink "$target_link")" || \
-        return 1
-
-    if [[ "$actual" != "$expected" ]]
-    then
-        services_log_error \
-            "Default target mismatch"
-
-        services_log_error \
-            "Expected: ${expected}"
-
-        services_log_error \
-            "Actual:   ${actual}"
-
-        return 1
-    fi
-
-    return 0
+    [[ "$actual" == "$expected" ]]
 }
 
 #============================================================
-# Save configuration
+# Save
 #============================================================
 
 services_save()
 {
-    local config_dir=""
+    local directory
 
-    services_log_info \
-        "Saving services configuration"
+    directory="$(dirname "$SERVICES_CONFIG_FILE")"
 
-    config_dir="$(dirname "$SERVICES_CONFIG_FILE")"
-
-    mkdir -p "$config_dir" || \
-        return 1
+    mkdir -p "$directory" || return 1
 
     cat > "$SERVICES_CONFIG_FILE" <<EOF
-#============================================================
-# Arch Installer
-# Services configuration
-#============================================================
-
-HOSTNAME='${SERVICES_HOSTNAME}'
-SSH_ENABLED='${SERVICES_ENABLE_SSH}'
-NETWORK_SERVICE='${SERVICES_NETWORK_SERVICE}'
-DEFAULT_TARGET='${SERVICES_GRAPHICAL_TARGET}'
+HOSTNAME=${SERVICES_HOSTNAME}
+SSH_ENABLED=${SERVICES_ENABLE_SSH}
+NETWORK_SERVICE=${SERVICES_NETWORK_SERVICE}
+DEFAULT_TARGET=${SERVICES_GRAPHICAL_TARGET}
 EOF
-
-    chmod 0644 "$SERVICES_CONFIG_FILE" 2>/dev/null || true
 
     return 0
 }
 
 #============================================================
-# Main installer stage
+# Main stage
 #============================================================
 
 services_configure()
 {
-    services_log_info \
-        "System service configuration started"
+    services_log_info "System service configuration started"
 
-    #--------------------------------------------------------
-    # Target
-    #--------------------------------------------------------
+    services_check_target || return 1
+    services_load_config || return 1
+    services_validate_hostname || return 1
+    services_validate_ssh || return 1
 
-    services_check_target || \
-        return 1
+    services_configure_hostname || return 1
+    services_configure_hosts || return 1
 
-    #--------------------------------------------------------
-    # Configuration
-    #--------------------------------------------------------
+    services_network || return 1
+    services_ssh || return 1
 
-    services_load_config || \
-        return 1
+    services_graphical_target || return 1
 
-    services_validate_hostname || \
-        return 1
+    services_check_hostname || return 1
+    services_check_hosts || return 1
+    services_check_network || return 1
+    services_check_ssh || return 1
+    services_check_target_mode || return 1
 
-    services_validate_ssh || \
-        return 1
+    services_save || return 1
 
-    #--------------------------------------------------------
-    # Files
-    #--------------------------------------------------------
-
-    services_configure_hostname || \
-        return 1
-
-    services_configure_hosts || \
-        return 1
-
-    #--------------------------------------------------------
-    # Services
-    #--------------------------------------------------------
-
-    services_network || \
-        return 1
-    services_ssh || \
-        return 1
-    #--------------------------------------------------------
-    # systemd target
-    #--------------------------------------------------------
-    services_graphical_target || \
-        return 1
-    #--------------------------------------------------------
-    # Verification
-    #--------------------------------------------------------
-    services_check_hostname || \
-        return 1
-    services_check_hosts || \
-        return 1
-    services_check_network || \
-        return 1
-    services_check_ssh || \
-        return 1
-    services_check_target_mode || \
-        return 1
-    #--------------------------------------------------------
-    # Save
-    #--------------------------------------------------------
-
-    services_save || \
-        return 1
-    #--------------------------------------------------------
-    # Finished
-    #--------------------------------------------------------
     if declare -F dialog_message >/dev/null 2>&1
     then
         dialog_message \
@@ -937,10 +404,11 @@ services_configure()
             "System services configured successfully"
     fi
 
-    services_log_info \
-        "System service configuration finished"
+    services_log_info "System service configuration finished"
+
     return 0
 }
+
 #============================================================
 # END
 #============================================================

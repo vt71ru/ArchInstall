@@ -481,21 +481,36 @@ tui_disable_input()
 
 tui_start()
 {
+    tui_log_info "TUI_START: enter"
+
     if (( ! TUI_INITIALIZED ))
     then
+        tui_log_info "TUI_START: calling tui_init"
+
         if ! tui_init
         then
+            tui_log_error "TUI_START: tui_init failed"
             return 1
         fi
+
+        tui_log_info "TUI_START: tui_init OK"
     fi
+
+    tui_log_info "TUI_START: TUI_FD=${TUI_FD}"
 
     if ! tui_require_tty
     then
+        tui_log_error "TUI_START: tui_require_tty failed"
         tui_restore
         return 1
     fi
 
+    tui_log_info "TUI_START: TTY OK"
+
     tui_update_size
+
+    tui_log_info \
+        "TUI_START: size=${TUI_COLS}x${TUI_ROWS}"
 
     if (( TUI_ROWS < 12 || TUI_COLS < 40 ))
     then
@@ -506,20 +521,21 @@ tui_start()
         return 1
     fi
 
-    #
-    # Configure keyboard input.
-    #
+    tui_log_info "TUI_START: enabling input"
+
     if ! tui_enable_input
     then
+        tui_log_error "TUI_START: tui_enable_input failed"
         tui_restore
         return 1
     fi
 
-    #
-    # Enter alternate screen.
-    #
+    tui_log_info "TUI_START: input enabled"
+
     if (( ! TUI_ALT_SCREEN ))
     then
+        tui_log_info "TUI_START: entering alternate screen"
+
         if ! tui_printf '\033[?1049h'
         then
             tui_log_error \
@@ -530,11 +546,10 @@ tui_start()
         fi
 
         TUI_ALT_SCREEN=1
+
+        tui_log_info "TUI_START: alternate screen OK"
     fi
 
-    #
-    # Clear screen.
-    #
     if ! tui_clear
     then
         tui_log_error \
@@ -544,9 +559,8 @@ tui_start()
         return 1
     fi
 
-    #
-    # Hide cursor.
-    #
+    tui_log_info "TUI_START: screen cleared"
+
     if ! tui_printf '\033[?25l'
     then
         tui_log_error \
@@ -558,16 +572,14 @@ tui_start()
 
     TUI_CURSOR_HIDDEN=1
 
-    #
-    # Reset terminal attributes.
-    #
     tui_printf '\033[0m' || true
 
     TUI_ACTIVE=1
 
+    tui_log_info "TUI_START: complete"
+
     return 0
 }
-
 #============================================================
 # TUI ABORT
 #============================================================

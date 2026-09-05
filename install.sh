@@ -1536,6 +1536,11 @@ main()
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]
 then
-    main "$@"
-    exit $?
+    if main "$@"
+    then
+        exit 0
+    else
+        rc=$?
+        exit "$rc"
+    fi
 fi

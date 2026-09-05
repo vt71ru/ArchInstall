@@ -10,22 +10,14 @@
 # Ответственность:
 #   • определение ROOT_DIR
 #   • проверка окружения
-#   • загрузка библиотек
-#   • загрузка installer-модулей
-#   • инициализация logger
-#   • инициализация colors
+#   • загрузка logger
+#   • загрузка core libraries
+#   • загрузка installer modules
+#   • инициализация CONFIG
+#   • определение boot mode
 #   • инициализация TUI
 #   • аварийное восстановление терминала
 #   • запуск главного меню
-#
-# Не содержит:
-#   • partition logic
-#   • filesystem logic
-#   • package logic
-#   • bootloader logic
-#   • CONFIG business logic
-#   • keyboard parser
-#   • menu implementation
 #
 # ============================================================
 
@@ -62,12 +54,12 @@ TERMINAL_STATE_SAVED=0
 ORIGINAL_STTY_STATE=""
 
 # ============================================================
-# DEBUG / TRACE
+# DEBUG
 # ============================================================
 
 INSTALLER_DEBUG="${INSTALLER_DEBUG:-0}"
 
-if (( INSTALLER_DEBUG ))
+if (( INSTALLER_DEBUG != 0 ))
 then
     PS4='+ ${BASH_SOURCE}:${LINENO}:${FUNCNAME[0]}: '
 fi
@@ -97,8 +89,8 @@ get_script_dir()
         fi
     done
 
-    cd -P "$(dirname "$source")" >/dev/null 2>&1
-    pwd
+    cd -P "$(dirname "$source")" >/dev/null 2>&1 &&
+        pwd
 }
 
 ROOT_DIR="$(get_script_dir)"
@@ -157,13 +149,6 @@ on_error()
     local function_name="${4:-main}"
     local command="${BASH_COMMAND:-unknown}"
 
-    if (( INSTALLER_EXITING ))
-    then
-        return "$code"
-    fi
-
-    INSTALLER_EXITING=1
-
     bootstrap_output ""
     bootstrap_output "============================================================"
     bootstrap_output "FATAL ERROR"
@@ -178,18 +163,12 @@ on_error()
     bootstrap_output "CALL STACK:"
 
     local i=0
-    local stack_function=""
-    local stack_source=""
-    local stack_line=""
 
     while (( i < ${#FUNCNAME[@]} ))
     do
-        stack_function="${FUNCNAME[$i]:-unknown}"
-        stack_source="${BASH_SOURCE[$i]:-unknown}"
-        stack_line="${BASH_LINENO[$i]:-unknown}"
-
         bootstrap_output \
-            "  #${i} ${stack_function} (${stack_source}:${stack_line})"
+            "  #${i} ${FUNCNAME[$i]:-unknown} " \
+            "(${BASH_SOURCE[$i]:-unknown}:${BASH_LINENO[$i]:-unknown})"
 
         (( i += 1 ))
     done
@@ -209,16 +188,11 @@ on_error()
 }
 
 # ============================================================
-# SIGNAL HANDLERS
+# SIGNALS
 # ============================================================
 
 on_sigint()
 {
-    if (( INSTALLER_EXITING ))
-    then
-        return 130
-    fi
-
     INSTALLER_EXITING=1
 
     bootstrap_output ""
@@ -229,11 +203,6 @@ on_sigint()
 
 on_sigterm()
 {
-    if (( INSTALLER_EXITING ))
-    then
-        return 143
-    fi
-
     INSTALLER_EXITING=1
 
     bootstrap_output ""
@@ -243,14 +212,14 @@ on_sigterm()
 }
 
 # ============================================================
-# LOGGER WRAPPERS
+# SAFE LOGGER WRAPPERS
 # ============================================================
 
 safe_log_info()
 {
-    if declare -F log_info >/dev/null 2>&1
+    if declare -F logger_info >/dev/null 2>&1
     then
-        log_info "$*" || true
+        logger_info "$*" || true
     else
         bootstrap_output "[INFO] $*"
     fi
@@ -260,9 +229,9 @@ safe_log_info()
 
 safe_log_warn()
 {
-    if declare -F log_warn >/dev/null 2>&1
+    if declare -F logger_warn >/dev/null 2>&1
     then
-        log_warn "$*" || true
+        logger_warn "$*" || true
     else
         bootstrap_output "[WARN] $*"
     fi
@@ -272,9 +241,9 @@ safe_log_warn()
 
 safe_log_error()
 {
-    if declare -F log_error >/dev/null 2>&1
+    if declare -F logger_error >/dev/null 2>&1
     then
-        log_error "$*" || true
+        logger_error "$*" || true
     else
         bootstrap_output "[ERROR] $*"
     fi
@@ -283,7 +252,7 @@ safe_log_error()
 }
 
 # ============================================================
-# LOAD ONE LIBRARY / MODULE
+# LOAD MODULE
 # ============================================================
 
 load_module()
@@ -341,10 +310,8 @@ load_module()
     fi
 
     #
-    # Source into the current shell.
-    #
-    # IMPORTANT:
-    # Do not use a subshell here.
+    # Не использовать subshell.
+    # Модуль должен загрузиться в текущий shell.
     #
 
     if ! source "$file"
@@ -362,36 +329,31 @@ load_module()
 }
 
 # ============================================================
-# REQUIRE LIB
+# REQUIRE LIBRARY
 # ============================================================
 
 require_lib()
 {
     local name="${1:-}"
-    local file="${LIB_DIR}/${name}"
 
-    load_module lib "$name" || return 1
-
-    if [[ ! -f "$file" ]]
-    then
-        bootstrap_output \
-            "ERROR: required library missing: ${file}"
-
-        return 1
-    fi
+    load_module \
+        lib \
+        "$name" || return 1
 
     return 0
 }
 
 # ============================================================
-# REQUIRE INSTALLER MODULE
+# REQUIRE INSTALLER
 # ============================================================
 
 require_installer()
 {
     local name="${1:-}"
 
-    load_module installer "$name" || return 1
+    load_module \
+        installer \
+        "$name" || return 1
 
     return 0
 }
@@ -428,9 +390,7 @@ check_arch_environment()
     bootstrap_output \
         "Checking Arch Linux environment..."
 
-    local os_release="/etc/os-release"
-
-    if [[ ! -f "$os_release" ]]
+    if [[ ! -f /etc/os-release ]]
     then
         bootstrap_output \
             "ERROR: /etc/os-release not found"
@@ -438,35 +398,23 @@ check_arch_environment()
         return 1
     fi
 
-    local id=""
-    local name=""
+    local os_id=""
 
-    if ! id="$(
-        . "$os_release"
+    if ! os_id="$(
+        . /etc/os-release
         printf '%s' "${ID:-}"
     )"
     then
         bootstrap_output \
-            "ERROR: unable to read distribution ID"
+            "ERROR: cannot read operating system ID"
 
         return 1
     fi
 
-    if ! name="$(
-        . "$os_release"
-        printf '%s' "${NAME:-}"
-    )"
-    then
-        name=""
-    fi
-
-    if [[ "$id" != "arch" ]]
+    if [[ "$os_id" != "arch" ]]
     then
         bootstrap_output \
             "Arch Linux check: FAILED"
-
-        bootstrap_output \
-            "Detected distribution: ${name:-unknown} (${id:-unknown})"
 
         return 1
     fi
@@ -505,11 +453,11 @@ check_project_structure()
     local required_file=""
 
     for required_file in \
+        "${LIB_DIR}/logger.sh" \
         "${LIB_DIR}/config.sh" \
         "${LIB_DIR}/common.sh" \
         "${LIB_DIR}/colors.sh" \
-        "${LIB_DIR}/tui.sh" \
-        "${LIB_DIR}/logger.sh"
+        "${LIB_DIR}/tui.sh"
     do
         if [[ ! -f "$required_file" ]]
         then
@@ -527,7 +475,7 @@ check_project_structure()
 }
 
 # ============================================================
-# /mnt CHECK
+# MOUNTPOINT
 # ============================================================
 
 check_mountpoint()
@@ -544,7 +492,7 @@ check_mountpoint()
 }
 
 # ============================================================
-# TERMINAL CHECK
+# TERMINAL
 # ============================================================
 
 check_terminal()
@@ -553,14 +501,6 @@ check_terminal()
         "Checking terminal..."
 
     if [[ ! -e /dev/tty ]]
-    then
-        bootstrap_output \
-            "Terminal check: FAILED"
-
-        return 1
-    fi
-
-    if [[ ! -t 0 && ! -t 1 && ! -t 2 ]]
     then
         bootstrap_output \
             "Terminal check: FAILED"
@@ -584,6 +524,14 @@ check_terminal()
         return 1
     fi
 
+    if ! stty -g </dev/tty >/dev/null 2>&1
+    then
+        bootstrap_output \
+            "Terminal check: FAILED"
+
+        return 1
+    fi
+
     bootstrap_output \
         "Terminal check: OK"
 
@@ -591,7 +539,7 @@ check_terminal()
 }
 
 # ============================================================
-# DEPENDENCY CHECK
+# DEPENDENCIES
 # ============================================================
 
 check_dependencies()
@@ -607,13 +555,15 @@ check_dependencies()
         sed \
         grep \
         cat \
-        printf \
         date \
         tty \
         stty \
         tput \
         mountpoint \
-        find
+        find \
+        lsblk \
+        blkid \
+        findmnt
     do
         if ! command -v "$dependency" >/dev/null 2>&1
         then
@@ -631,6 +581,53 @@ check_dependencies()
 }
 
 # ============================================================
+# LOAD LOGGER
+# ============================================================
+
+load_logger()
+{
+    bootstrap_output \
+        "Loading logger..."
+
+    if ! declare -F logger_info >/dev/null 2>&1
+    then
+        require_lib \
+            "logger.sh" || return 1
+    fi
+
+    if ! declare -F logger_info >/dev/null 2>&1
+    then
+        bootstrap_output \
+            "ERROR: logger_info() is unavailable"
+
+        return 1
+    fi
+
+    if ! declare -F logger_warn >/dev/null 2>&1
+    then
+        bootstrap_output \
+            "ERROR: logger_warn() is unavailable"
+
+        return 1
+    fi
+
+    if ! declare -F logger_error >/dev/null 2>&1
+    then
+        bootstrap_output \
+            "ERROR: logger_error() is unavailable"
+
+        return 1
+    fi
+
+    LOGGER_READY=1
+
+    logger_info \
+        "${APP_NAME} ${APP_VERSION}"
+
+    return 0
+}
+
+# ============================================================
 # LOAD CORE LIBRARIES
 # ============================================================
 
@@ -639,112 +636,93 @@ load_core_libraries()
     bootstrap_output \
         "Loading core libraries..."
 
-    require_lib "config.sh" || return 1
-    require_lib "common.sh" || return 1
-    require_lib "colors.sh" || return 1
-    require_lib "tui.sh" || return 1
+    #
+    # logger уже должен быть загружен.
+    #
+
+    if ! declare -F logger_info >/dev/null 2>&1
+    then
+        bootstrap_output \
+            "ERROR: logger_info() is unavailable"
+
+        return 1
+    fi
+
+    require_lib \
+        "config.sh" || return 1
+
+    require_lib \
+        "common.sh" || return 1
+
+    require_lib \
+        "colors.sh" || return 1
+
+    require_lib \
+        "tui.sh" || return 1
 
     #
-    # colors.sh must provide colors_init().
+    # Проверяем colors_init после source colors.sh.
     #
 
     if ! declare -F colors_init >/dev/null 2>&1
     then
-        bootstrap_output \
-            "ERROR: colors_init() is unavailable"
+        logger_error \
+            "colors_init() is unavailable"
 
         return 1
     fi
 
     if ! colors_init
     then
-        bootstrap_output \
-            "ERROR: colors_init() failed"
+        logger_error \
+            "colors_init() failed"
 
         return 1
     fi
 
-    bootstrap_output \
+    logger_info \
         "Core libraries loaded"
 
     bootstrap_output \
-        "Colors initialized"
+        "Core libraries: OK"
 
     return 0
 }
 
 # ============================================================
-# LOGGER
-# ============================================================
-
-load_logger()
-{
-    bootstrap_output \
-        "Loading logger..."
-
-    #
-    # logger.sh is loaded first if it wasn't loaded earlier.
-    #
-
-    if ! declare -F log_info >/dev/null 2>&1
-    then
-        if ! require_lib "logger.sh"
-        then
-            bootstrap_output \
-                "ERROR: failed to load logger.sh"
-
-            return 1
-        fi
-    fi
-
-    if ! declare -F log_info >/dev/null 2>&1
-    then
-        bootstrap_output \
-            "ERROR: log_info() is unavailable"
-
-        return 1
-    fi
-
-    safe_log_info \
-        "${APP_NAME} ${APP_VERSION}"
-
-    return 0
-}
-
-# ============================================================
-# CONFIG API CHECK
+# CONFIG API
 # ============================================================
 
 check_config_api()
 {
     safe_log_info \
-        "Checking config API"
+        "Checking CONFIG API"
 
-    local required_function=""
+    local function_name=""
 
-    for required_function in \
+    for function_name in \
         config_init \
         config_get \
         config_set \
         config_save
     do
-        if ! declare -F "$required_function" >/dev/null 2>&1
+        if ! declare -F "$function_name" >/dev/null 2>&1
         then
             safe_log_error \
-                "Config API function missing: ${required_function}"
+                "CONFIG API function missing: ${function_name}"
 
             return 1
         fi
     done
 
     safe_log_info \
-        "Config API: OK"
+        "CONFIG API: OK"
 
     return 0
 }
 
 # ============================================================
-# CONFIG INITIALIZATION
+# CONFIG INIT
 # ============================================================
 
 config_init_load()
@@ -781,9 +759,14 @@ detect_boot_mode()
         boot_mode="BIOS"
     fi
 
-    if declare -F config_set >/dev/null 2>&1
+    if ! config_set \
+        BOOT_MODE \
+        "$boot_mode"
     then
-        config_set BOOT_MODE "$boot_mode" || true
+        safe_log_error \
+            "Failed to save BOOT_MODE"
+
+        return 1
     fi
 
     export BOOT_MODE="$boot_mode"
@@ -802,24 +785,44 @@ detect_partition_table()
 {
     local table=""
 
-    if declare -F config_get >/dev/null 2>&1
+    if ! table="$(
+        config_get \
+            PARTITION_TABLE \
+            2>/dev/null
+    )"
     then
-        table="$(config_get PARTITION_TABLE 2>/dev/null || true)"
+        table=""
     fi
 
     if [[ -z "$table" ]]
     then
-        if [[ "${BOOT_MODE:-BIOS}" == "UEFI" ]]
-        then
-            table="GPT"
-        else
-            table="MBR"
-        fi
-    fi
+        case "${BOOT_MODE:-BIOS}"
+        in
+            UEFI)
+                table="GPT"
+                ;;
 
-    if declare -F config_set >/dev/null 2>&1
-    then
-        config_set PARTITION_TABLE "$table" || true
+            BIOS)
+                table="MBR"
+                ;;
+
+            *)
+                safe_log_error \
+                    "Cannot determine partition table"
+
+                return 1
+                ;;
+        esac
+
+        if ! config_set \
+            PARTITION_TABLE \
+            "$table"
+        then
+            safe_log_error \
+                "Failed to save PARTITION_TABLE"
+
+            return 1
+        fi
     fi
 
     export PARTITION_TABLE="$table"
@@ -831,7 +834,7 @@ detect_partition_table()
 }
 
 # ============================================================
-# INSTALLER MODULES
+# LOAD INSTALLER MODULES
 # ============================================================
 
 load_installer_modules()
@@ -840,8 +843,7 @@ load_installer_modules()
         "Loading installer modules..."
 
     #
-    # IMPORTANT:
-    # menu_main.sh must be loaded LAST.
+    # Stage modules.
     #
 
     require_installer "welcome.sh" || return 1
@@ -860,16 +862,17 @@ load_installer_modules()
     require_installer "services.sh" || return 1
     require_installer "bootloader.sh" || return 1
     require_installer "summary.sh" || return 1
-    require_installer "installer.sh" || return 1
 
     #
-    # Verify controller before loading menu.
+    # Controller MUST be loaded before menu.
     #
+
+    require_installer "installer.sh" || return 1
 
     if ! declare -F installer_full_install >/dev/null 2>&1
     then
         safe_log_error \
-            "installer_full_install() is unavailable after installer.sh"
+            "installer_full_install() is unavailable"
 
         return 1
     fi
@@ -899,10 +902,11 @@ load_installer_modules()
     fi
 
     #
-    # Menu MUST be loaded last.
+    # menu_main MUST be loaded LAST.
     #
 
-    require_installer "menu_main.sh" || return 1
+    require_installer \
+        "menu_main.sh" || return 1
 
     if ! declare -F menu_main >/dev/null 2>&1
     then
@@ -919,7 +923,7 @@ load_installer_modules()
 }
 
 # ============================================================
-# INSTALLER API CHECK
+# INSTALLER API
 # ============================================================
 
 check_installer_api()
@@ -957,7 +961,7 @@ check_installer_api()
 }
 
 # ============================================================
-# SAVE ORIGINAL STTY
+# SAVE ORIGINAL TERMINAL STATE
 # ============================================================
 
 save_original_terminal_state()
@@ -992,10 +996,6 @@ app_init()
     safe_log_info \
         "Initializing application"
 
-    #
-    # TUI must exist.
-    #
-
     if ! declare -F tui_init >/dev/null 2>&1
     then
         safe_log_error \
@@ -1012,15 +1012,7 @@ app_init()
         return 1
     fi
 
-    #
-    # Save state independently of TUI.
-    #
-
     save_original_terminal_state || true
-
-    #
-    # Initialize TUI.
-    #
 
     safe_log_info \
         "Initializing TUI"
@@ -1046,17 +1038,10 @@ app_init()
 
     TUI_READY=1
 
-    #
-    # Set title.
-    #
-
     if declare -F tui_set_title >/dev/null 2>&1
     then
-        if ! tui_set_title "${APP_NAME} ${APP_VERSION}"
-        then
-            safe_log_warn \
-                "tui_set_title() failed"
-        fi
+        tui_set_title \
+            "${APP_NAME} ${APP_VERSION}" || true
     fi
 
     if declare -F tui_clear >/dev/null 2>&1
@@ -1065,7 +1050,7 @@ app_init()
     fi
 
     safe_log_info \
-        "Application initialized"
+        "TUI started successfully"
 
     return 0
 }
@@ -1076,14 +1061,9 @@ app_init()
 
 draw_startup()
 {
-    if (( ! TUI_READY ))
+    if (( TUI_READY == 0 ))
     then
         return 0
-    fi
-
-    if ! declare -F tui_clear >/dev/null 2>&1
-    then
-        return 1
     fi
 
     if ! tui_clear
@@ -1094,39 +1074,30 @@ draw_startup()
     if declare -F titlebar_draw >/dev/null 2>&1
     then
         titlebar_draw \
-            "${APP_NAME}" || return 1
+            "$APP_NAME" || return 1
     fi
 
-    if declare -F tui_move >/dev/null 2>&1
-    then
-        tui_move 5 5 || return 1
-    fi
+    tui_move \
+        5 \
+        5 || return 1
 
     if declare -F color_info >/dev/null 2>&1
     then
         color_info \
             "Arch Linux installation system" || return 1
-    elif declare -F tui_print >/dev/null 2>&1
-    then
+    else
         tui_print \
             "Arch Linux installation system" || return 1
     fi
 
-    if declare -F tui_move >/dev/null 2>&1
-    then
-        tui_move 7 5 || return 1
-    fi
+    tui_move \
+        7 \
+        5 || return 1
 
-    if declare -F tui_print >/dev/null 2>&1
-    then
-        tui_print \
-            "Initializing installer..." || return 1
-    fi
+    tui_print \
+        "Initializing installer..." || return 1
 
-    if declare -F screen_refresh >/dev/null 2>&1
-    then
-        screen_refresh || true
-    fi
+    screen_refresh 2>/dev/null || true
 
     return 0
 }
@@ -1139,47 +1110,39 @@ cleanup()
 {
     local rc=$?
 
-    if (( INSTALLER_EXITING == 0 ))
-    then
-        INSTALLER_EXITING=1
-    fi
-
-    #
-    # Restore TUI.
-    #
+    INSTALLER_EXITING=1
 
     if declare -F tui_restore >/dev/null 2>&1
     then
         tui_restore || true
     fi
 
-    #
-    # Restore original stty state as a final fallback.
-    #
-
-    if (( TERMINAL_STATE_SAVED )) &&
+    if (( TERMINAL_STATE_SAVED != 0 )) &&
        [[ -n "${ORIGINAL_STTY_STATE:-}" ]] &&
        [[ -e /dev/tty ]]
     then
-        stty "$ORIGINAL_STTY_STATE" </dev/tty 2>/dev/null || true
+        stty \
+            "$ORIGINAL_STTY_STATE" \
+            </dev/tty \
+            2>/dev/null || true
     fi
-
-    #
-    # Last resort.
-    #
 
     if [[ -e /dev/tty ]]
     then
         stty sane </dev/tty 2>/dev/null || true
 
-        printf '\033[0m' >/dev/tty 2>/dev/null || true
-        printf '\033[?25h' >/dev/tty 2>/dev/null || true
-        printf '\033[?1049l' >/dev/tty 2>/dev/null || true
-    fi
+        printf '\033[0m' \
+            >/dev/tty \
+            2>/dev/null || true
 
-    #
-    # Close logger.
-    #
+        printf '\033[?25h' \
+            >/dev/tty \
+            2>/dev/null || true
+
+        printf '\033[?1049l' \
+            >/dev/tty \
+            2>/dev/null || true
+    fi
 
     if declare -F logger_shutdown >/dev/null 2>&1
     then
@@ -1246,10 +1209,12 @@ main()
 
     if check_root
     then
-        bootstrap_output "STEP 1 RESULT: OK"
+        bootstrap_output \
+            "STEP 1 RESULT: OK"
     else
         rc=$?
-        bootstrap_output "STEP 1 RESULT: FAILED (${rc})"
+        bootstrap_output \
+            "STEP 1 RESULT: FAILED (${rc})"
         return "$rc"
     fi
 
@@ -1262,10 +1227,12 @@ main()
 
     if check_arch_environment
     then
-        bootstrap_output "STEP 2 RESULT: OK"
+        bootstrap_output \
+            "STEP 2 RESULT: OK"
     else
         rc=$?
-        bootstrap_output "STEP 2 RESULT: FAILED (${rc})"
+        bootstrap_output \
+            "STEP 2 RESULT: FAILED (${rc})"
         return "$rc"
     fi
 
@@ -1278,10 +1245,12 @@ main()
 
     if check_project_structure
     then
-        bootstrap_output "STEP 3 RESULT: OK"
+        bootstrap_output \
+            "STEP 3 RESULT: OK"
     else
         rc=$?
-        bootstrap_output "STEP 3 RESULT: FAILED (${rc})"
+        bootstrap_output \
+            "STEP 3 RESULT: FAILED (${rc})"
         return "$rc"
     fi
 
@@ -1294,10 +1263,12 @@ main()
 
     if check_terminal
     then
-        bootstrap_output "STEP 4 RESULT: OK"
+        bootstrap_output \
+            "STEP 4 RESULT: OK"
     else
         rc=$?
-        bootstrap_output "STEP 4 RESULT: FAILED (${rc})"
+        bootstrap_output \
+            "STEP 4 RESULT: FAILED (${rc})"
         return "$rc"
     fi
 
@@ -1310,10 +1281,12 @@ main()
 
     if check_dependencies
     then
-        bootstrap_output "STEP 5 RESULT: OK"
+        bootstrap_output \
+            "STEP 5 RESULT: OK"
     else
         rc=$?
-        bootstrap_output "STEP 5 RESULT: FAILED (${rc})"
+        bootstrap_output \
+            "STEP 5 RESULT: FAILED (${rc})"
         return "$rc"
     fi
 
@@ -1326,10 +1299,12 @@ main()
 
     if check_mountpoint
     then
-        bootstrap_output "STEP 6 RESULT: OK"
+        bootstrap_output \
+            "STEP 6 RESULT: OK"
     else
         rc=$?
-        bootstrap_output "STEP 6 RESULT: FAILED (${rc})"
+        bootstrap_output \
+            "STEP 6 RESULT: FAILED (${rc})"
         return "$rc"
     fi
 
@@ -1338,14 +1313,16 @@ main()
     # --------------------------------------------------------
 
     bootstrap_output \
-        "STEP 7: load_core_libraries"
+        "STEP 7: load_logger"
 
-    if load_core_libraries
+    if load_logger
     then
-        bootstrap_output "STEP 7 RESULT: OK"
+        bootstrap_output \
+            "STEP 7 RESULT: OK"
     else
         rc=$?
-        bootstrap_output "STEP 7 RESULT: FAILED (${rc})"
+        bootstrap_output \
+            "STEP 7 RESULT: FAILED (${rc})"
         return "$rc"
     fi
 
@@ -1353,16 +1330,17 @@ main()
     # STEP 8
     # --------------------------------------------------------
 
-    bootstrap_output \
-        "STEP 8: load_logger"
+    safe_log_info \
+        "STEP 8: load_core_libraries"
 
-    if load_logger
+    if load_core_libraries
     then
-        bootstrap_output "STEP 8 RESULT: OK"
-        LOGGER_READY=1
+        safe_log_info \
+            "STEP 8 RESULT: OK"
     else
         rc=$?
-        bootstrap_output "STEP 8 RESULT: FAILED (${rc})"
+        safe_log_error \
+            "STEP 8 RESULT: FAILED (${rc})"
         return "$rc"
     fi
 

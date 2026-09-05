@@ -10,17 +10,6 @@
 #============================================================
 
 #============================================================
-# LOAD GUARD
-#============================================================
-
-if [[ -n "${ARCH_INSTALLER_MENU_MAIN_LOADED:-}" ]]
-then
-    return 0 2>/dev/null || exit 0
-fi
-
-ARCH_INSTALLER_MENU_MAIN_LOADED=1
-
-#============================================================
 # STATE
 #============================================================
 
@@ -34,10 +23,7 @@ menu_main_log_info()
 {
     if declare -F logger_info >/dev/null 2>&1
     then
-        logger_info "$@" || true
-    elif declare -F log_info >/dev/null 2>&1
-    then
-        log_info "$@" || true
+        logger_info "$*" || true
     else
         printf '[INFO] %s\n' "$*" >&2
     fi
@@ -49,10 +35,7 @@ menu_main_log_warn()
 {
     if declare -F logger_warn >/dev/null 2>&1
     then
-        logger_warn "$@" || true
-    elif declare -F log_warn >/dev/null 2>&1
-    then
-        log_warn "$@" || true
+        logger_warn "$*" || true
     else
         printf '[WARN] %s\n' "$*" >&2
     fi
@@ -64,10 +47,7 @@ menu_main_log_error()
 {
     if declare -F logger_error >/dev/null 2>&1
     then
-        logger_error "$@" || true
-    elif declare -F log_error >/dev/null 2>&1
-    then
-        log_error "$@" || true
+        logger_error "$*" || true
     else
         printf '[ERROR] %s\n' "$*" >&2
     fi
@@ -81,7 +61,7 @@ menu_main_log_error()
 
 menu_main_check_controller()
 {
-    local function_name
+    local function_name=""
     local missing=0
 
     menu_main_log_info \
@@ -137,7 +117,8 @@ menu_main_header()
     tui_move 4 5 || return 1
 
     tui_print \
-        "Use Up/Down to navigate and Enter to select." || return 1
+        "Use Up/Down to navigate and Enter to select." \
+        || return 1
 
     return 0
 }
@@ -185,15 +166,8 @@ menu_main_wait()
         fi
 
         case "${TUI_EVENT:-}" in
-            "$EVENT_SELECT")
+            "$EVENT_SELECT"|"$EVENT_BACK")
                 return 0
-                ;;
-
-            "$EVENT_BACK")
-                return 0
-                ;;
-
-            *)
                 ;;
         esac
     done
@@ -317,9 +291,6 @@ menu_main_run_stage()
         return "$rc"
     fi
 
-    menu_main_log_info \
-        "Stage completed successfully: ${stage}"
-
     if declare -F dialog_info >/dev/null 2>&1
     then
         dialog_info \
@@ -339,22 +310,11 @@ menu_main_install()
     local rc=0
     local stage=""
 
-    #--------------------------------------------------------
-    # Absolute marker.
-    #
-    # Этот вывод позволяет точно определить, что загружена
-    # именно новая версия menu_main.sh.
-    #--------------------------------------------------------
-
     menu_main_log_info \
         "### NEW MENU_MAIN_INSTALL ###"
 
     menu_main_log_info \
         "FULL INSTALLATION SELECTED"
-
-    #--------------------------------------------------------
-    # Controller
-    #--------------------------------------------------------
 
     menu_main_log_info \
         "CHECK installer_full_install()"
@@ -374,12 +334,8 @@ menu_main_install()
     menu_main_log_info \
         "installer_full_install() is available"
 
-    #--------------------------------------------------------
-    # Screen
-    #--------------------------------------------------------
-
     menu_main_log_info \
-        "Preparing full installation screen"
+        "FUNCTION=$(declare -F installer_full_install)"
 
     if ! tui_clear
     then
@@ -423,15 +379,19 @@ menu_main_install()
 
     screen_refresh 2>/dev/null || true
 
-    #--------------------------------------------------------
-    # Start controller
-    #--------------------------------------------------------
-
     menu_main_log_info \
         "ACTION=[FULL_INSTALLATION]"
 
     menu_main_log_info \
         "CALL=[installer_full_install]"
+
+    #
+    # Прямой диагностический маркер.
+    #
+
+    printf '%s\n' \
+        "================ CALL=[installer_full_install]" \
+        >/dev/tty 2>/dev/null || true
 
     if installer_full_install
     then
@@ -442,10 +402,6 @@ menu_main_install()
 
     menu_main_log_info \
         "RETURN=[installer_full_install] RC=${rc}"
-
-    #--------------------------------------------------------
-    # Failure
-    #--------------------------------------------------------
 
     if (( rc != 0 ))
     then
@@ -462,14 +418,10 @@ menu_main_install()
 
         menu_main_operation_failed \
             "Installation failed" \
-            "Stage: ${stage}\nReturn code: ${rc}" || true
+            "Stage: ${stage}, return code: ${rc}" || true
 
         return "$rc"
     fi
-
-    #--------------------------------------------------------
-    # Success
-    #--------------------------------------------------------
 
     menu_main_log_info \
         "FULL INSTALLATION COMPLETED SUCCESSFULLY"
@@ -613,6 +565,7 @@ menu_main_shell()
     printf 'Type "exit" to return to the installer.\n\n'
 
     /bin/bash
+
     rc=$?
 
     printf '\n'
@@ -688,20 +641,12 @@ menu_main_draw()
         selected=0
     fi
 
-    if (( selected < 0 ))
-    then
-        selected=0
-    fi
-
     if (( selected >= item_count ))
     then
         selected=$((item_count - 1))
     fi
 
-    if declare -F tui_update_size >/dev/null 2>&1
-    then
-        tui_update_size || true
-    fi
+    tui_update_size || true
 
     box_height=$((item_count + 4))
     box_width=$((TUI_COLS - 10))
@@ -800,10 +745,6 @@ menu_main()
     menu_main_log_info \
         "Entering main menu"
 
-    #--------------------------------------------------------
-    # Controller
-    #--------------------------------------------------------
-
     if ! menu_main_check_controller
     then
         menu_main_operation_failed \
@@ -814,16 +755,12 @@ menu_main()
         return 1
     fi
 
-    #--------------------------------------------------------
-    # Normalize selection
-    #--------------------------------------------------------
-
     if ! [[ "$selected" =~ ^[0-9]+$ ]]
     then
         selected=0
     fi
 
-    if (( selected < 0 || selected >= item_count ))
+    if (( selected >= item_count ))
     then
         selected=0
     fi
@@ -836,16 +773,8 @@ menu_main()
     menu_main_log_info \
         "Initial selection item=${items[selected]}"
 
-    #========================================================
-    # MENU LOOP
-    #========================================================
-
     while true
     do
-        #----------------------------------------------------
-        # Draw
-        #----------------------------------------------------
-
         if ! menu_main_draw \
             items \
             "$selected"
@@ -855,10 +784,6 @@ menu_main()
 
             return 1
         fi
-
-        #----------------------------------------------------
-        # Read event
-        #----------------------------------------------------
 
         if ! menu_main_read_event
         then
@@ -874,14 +799,8 @@ menu_main()
         menu_main_log_info \
             "ITEM=[${items[selected]}]"
 
-        #====================================================
-        # DISPATCH
-        #====================================================
-
         case "${TUI_EVENT:-}" in
-
             "$EVENT_UP")
-
                 if (( selected > 0 ))
                 then
                     selected=$((selected - 1))
@@ -890,11 +809,9 @@ menu_main()
                 fi
 
                 MENU_MAIN_SELECTED="$selected"
-
                 ;;
 
             "$EVENT_DOWN")
-
                 if (( selected < item_count - 1 ))
                 then
                     selected=$((selected + 1))
@@ -903,27 +820,20 @@ menu_main()
                 fi
 
                 MENU_MAIN_SELECTED="$selected"
-
                 ;;
 
             "$EVENT_HOME")
-
                 selected=0
                 MENU_MAIN_SELECTED=0
-
                 ;;
 
             "$EVENT_END")
-
                 selected=$((item_count - 1))
                 MENU_MAIN_SELECTED="$selected"
-
                 ;;
 
             "$EVENT_SELECT")
-
                 MENU_MAIN_SELECTED="$selected"
-
                 operation_rc=0
 
                 menu_main_log_info \
@@ -937,13 +847,7 @@ menu_main()
 
                 case "$selected"
                 in
-
-                    #----------------------------------------
-                    # Full installation
-                    #----------------------------------------
-
                     0)
-
                         menu_main_log_info \
                             "ACTION=[FULL_INSTALLATION]"
 
@@ -959,15 +863,9 @@ menu_main()
 
                         menu_main_log_info \
                             "DISPATCH <- menu_main_install RC=${operation_rc}"
-
                         ;;
 
-                    #----------------------------------------
-                    # Partition
-                    #----------------------------------------
-
                     1)
-
                         menu_main_log_info \
                             "ACTION=[PARTITION]"
 
@@ -977,15 +875,9 @@ menu_main()
                         else
                             operation_rc=$?
                         fi
-
                         ;;
 
-                    #----------------------------------------
-                    # Filesystem
-                    #----------------------------------------
-
                     2)
-
                         menu_main_log_info \
                             "ACTION=[FILESYSTEM]"
 
@@ -995,15 +887,9 @@ menu_main()
                         else
                             operation_rc=$?
                         fi
-
                         ;;
 
-                    #----------------------------------------
-                    # Mount
-                    #----------------------------------------
-
                     3)
-
                         menu_main_log_info \
                             "ACTION=[MOUNT]"
 
@@ -1013,15 +899,9 @@ menu_main()
                         else
                             operation_rc=$?
                         fi
-
                         ;;
 
-                    #----------------------------------------
-                    # Packages
-                    #----------------------------------------
-
                     4)
-
                         menu_main_log_info \
                             "ACTION=[PACKAGES]"
 
@@ -1031,15 +911,9 @@ menu_main()
                         else
                             operation_rc=$?
                         fi
-
                         ;;
 
-                    #----------------------------------------
-                    # Bootloader
-                    #----------------------------------------
-
                     5)
-
                         menu_main_log_info \
                             "ACTION=[BOOTLOADER]"
 
@@ -1049,15 +923,9 @@ menu_main()
                         else
                             operation_rc=$?
                         fi
-
                         ;;
 
-                    #----------------------------------------
-                    # System information
-                    #----------------------------------------
-
                     6)
-
                         menu_main_log_info \
                             "ACTION=[SYSTEM_INFORMATION]"
 
@@ -1067,15 +935,9 @@ menu_main()
                         else
                             operation_rc=$?
                         fi
-
                         ;;
 
-                    #----------------------------------------
-                    # Shell
-                    #----------------------------------------
-
                     7)
-
                         menu_main_log_info \
                             "ACTION=[SHELL]"
 
@@ -1085,15 +947,9 @@ menu_main()
                         else
                             operation_rc=$?
                         fi
-
                         ;;
 
-                    #----------------------------------------
-                    # Exit
-                    #----------------------------------------
-
                     8)
-
                         menu_main_log_info \
                             "ACTION=[EXIT]"
 
@@ -1106,7 +962,6 @@ menu_main()
                         fi
 
                         operation_rc=1
-
                         ;;
                 esac
 
@@ -1118,11 +973,9 @@ menu_main()
                     menu_main_log_error \
                         "MENU ACTION RESULT=[FAILED] RC=${operation_rc}"
                 fi
-
                 ;;
 
             "$EVENT_BACK")
-
                 menu_main_log_info \
                     "ESC PRESSED"
 
@@ -1136,25 +989,19 @@ menu_main()
 
                 menu_main_log_info \
                     "EXIT CANCELLED BY ESC"
-
                 ;;
 
             "$EVENT_NONE"|"")
-
                 ;;
 
             "$EVENT_CHAR")
-
                 menu_main_log_info \
                     "Ignoring character event: [${TUI_EVENT_CHAR:-empty}]"
-
                 ;;
 
             *)
-
                 menu_main_log_warn \
                     "Unhandled event: [${TUI_EVENT:-empty}]"
-
                 ;;
         esac
     done

@@ -7,49 +7,16 @@
 #
 #  Единая система цветового оформления проекта.
 #
-#  Ответственность:
-#   • ANSI-цвета
-#   • включение/отключение цветов
-#   • цветовой вывод
-#   • цветовые алиасы
-#
-#  Не содержит:
-#   • TUI-логику
-#   • меню
-#   • логику установки
-#   • CONFIG
-#
 #============================================================
 
 #============================================================
-# Include guard
-#============================================================
-#
-# Не используем только ARCH_INSTALLER_COLORS_SH_LOADED,
-# поскольку эта переменная могла быть унаследована из
-# родительского shell.
-#
-# Реальный признак загрузки — наличие colors_init().
-#
-#============================================================
-
-if declare -F colors_init >/dev/null 2>&1
-then
-    return 0 2>/dev/null || exit 0
-fi
-
-ARCH_INSTALLER_COLORS_SH_LOADED=1
-
-
-#============================================================
-# Color state
+# COLOR STATE
 #============================================================
 
 COLORS_ENABLED=0
 
-
 #============================================================
-# ANSI codes
+# ANSI CODES
 #============================================================
 
 readonly COLOR_RESET='0'
@@ -72,9 +39,8 @@ readonly COLOR_BRIGHT_MAGENTA='95'
 readonly COLOR_BRIGHT_CYAN='96'
 readonly COLOR_BRIGHT_WHITE='97'
 
-
 #============================================================
-# Initialize colors
+# INITIALIZE
 #============================================================
 
 colors_init()
@@ -99,9 +65,8 @@ colors_init()
     return 0
 }
 
-
 #============================================================
-# Enable / disable
+# ENABLE / DISABLE
 #============================================================
 
 colors_enable()
@@ -126,9 +91,8 @@ colors_enabled()
     return 1
 }
 
-
 #============================================================
-# Generic color output
+# GENERIC OUTPUT
 #============================================================
 
 color_print()
@@ -142,7 +106,7 @@ color_print()
         return 0
     fi
 
-    if (( COLORS_ENABLED ))
+    if (( COLORS_ENABLED != 0 ))
     then
         printf '\033[%sm%s\033[0m' \
             "$code" \
@@ -159,18 +123,14 @@ color_println()
     local code="${1:-}"
     local text="${2-}"
 
-    color_print \
-        "$code" \
-        "$text"
-
+    color_print "$code" "$text"
     printf '\n'
 
     return 0
 }
 
-
 #============================================================
-# Semantic colors
+# SEMANTIC COLORS
 #============================================================
 
 color_success()
@@ -229,9 +189,8 @@ color_dim()
         "${1-}"
 }
 
-
 #============================================================
-# Colored prefixes
+# PREFIXES
 #============================================================
 
 color_prefix_info()
@@ -278,9 +237,8 @@ color_prefix_error()
     return 0
 }
 
-
 #============================================================
-# Header
+# HEADER
 #============================================================
 
 color_header()
@@ -306,9 +264,8 @@ color_header()
     return 0
 }
 
-
 #============================================================
-# Stage header
+# STAGE HEADER
 #============================================================
 
 color_stage_header()
@@ -338,9 +295,8 @@ color_stage_header()
     return 0
 }
 
-
 #============================================================
-# Menu item
+# MENU ITEM
 #============================================================
 
 color_menu_item()
@@ -363,9 +319,8 @@ color_menu_item()
     return 0
 }
 
-
 #============================================================
-# Color test
+# COLOR TEST
 #============================================================
 
 colors_test()
@@ -373,34 +328,14 @@ colors_test()
     color_header \
         'Arch Installer - Color Test'
 
-    color_success \
-        '[ OK ] Success'
-
-    color_error \
-        '[ERROR] Error'
-
-    color_warning \
-        '[WARN] Warning'
-
-    color_info \
-        '[INFO] Information'
-
-    color_title \
-        'Title'
-
-    color_stage \
-        'Installation stage'
-
-    color_step \
-        'Installation step'
-
-    color_dim \
-        'Secondary information'
+    color_success '[ OK ] Success'
+    color_error '[ERROR] Error'
+    color_warning '[WARN] Warning'
+    color_info '[INFO] Information'
+    color_title 'Title'
+    color_stage 'Installation stage'
+    color_step 'Installation step'
+    color_dim 'Secondary information'
 
     return 0
 }
-
-
-#============================================================
-# End of lib/colors.sh
-#============================================================

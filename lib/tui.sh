@@ -532,34 +532,36 @@ tui_start()
 
     tui_log_info "TUI_START: input enabled"
 
-    if (( ! TUI_ALT_SCREEN ))
-    then
-        tui_log_info "TUI_START: entering alternate screen"
+   if (( ! TUI_ALT_SCREEN ))
+   then
+    tui_log_info "TUI_START: entering alternate screen"
 
-        if ! tui_printf '\033[?1049h'
-        then
-            tui_log_error \
-                "TUI: unable to enter alternate screen"
-
-            tui_restore
-            return 1
-        fi
-
-        TUI_ALT_SCREEN=1
-
-        tui_log_info "TUI_START: alternate screen OK"
-    fi
-
-    if ! tui_clear
+    if ! tui_printf '\033[?1049h'
     then
         tui_log_error \
-            "TUI: unable to clear screen"
+            "TUI: unable to enter alternate screen"
 
         tui_restore
         return 1
     fi
 
-    tui_log_info "TUI_START: screen cleared"
+    TUI_ALT_SCREEN=1
+
+    tui_log_info "TUI_START: alternate screen OK"
+fi
+
+tui_log_info "TUI_START: calling tui_clear"
+
+if ! tui_clear
+then
+    tui_log_error \
+        "TUI: unable to clear screen"
+
+    tui_restore
+    return 1
+fi
+
+tui_log_info "TUI_START: tui_clear OK"
 
     if ! tui_printf '\033[?25l'
     then

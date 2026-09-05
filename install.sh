@@ -7,18 +7,6 @@
 #
 # Главный bootstrap / orchestrator.
 #
-# Ответственность:
-#   • определение ROOT_DIR
-#   • проверка окружения
-#   • загрузка logger
-#   • загрузка core libraries
-#   • загрузка installer modules
-#   • инициализация CONFIG
-#   • определение boot mode
-#   • инициализация TUI
-#   • аварийное восстановление терминала
-#   • запуск главного меню
-#
 # ============================================================
 
 set -Eeuo pipefail
@@ -44,12 +32,13 @@ ASSETS_DIR=""
 WIDGETS_DIR=""
 
 # ============================================================
-# RUNTIME STATE
+# RUNTIME
 # ============================================================
 
 LOGGER_READY=0
 TUI_READY=0
 INSTALLER_EXITING=0
+
 TERMINAL_STATE_SAVED=0
 ORIGINAL_STTY_STATE=""
 
@@ -89,8 +78,8 @@ get_script_dir()
         fi
     done
 
-    cd -P "$(dirname "$source")" >/dev/null 2>&1 &&
-        pwd
+    cd -P "$(dirname "$source")" >/dev/null 2>&1
+    pwd
 }
 
 ROOT_DIR="$(get_script_dir)"
@@ -148,6 +137,7 @@ on_error()
     local source_file="${3:-unknown}"
     local function_name="${4:-main}"
     local command="${BASH_COMMAND:-unknown}"
+    local i=0
 
     bootstrap_output ""
     bootstrap_output "============================================================"
@@ -161,8 +151,6 @@ on_error()
     bootstrap_output ""
 
     bootstrap_output "CALL STACK:"
-
-    local i=0
 
     while (( i < ${#FUNCNAME[@]} ))
     do
@@ -212,7 +200,7 @@ on_sigterm()
 }
 
 # ============================================================
-# SAFE LOGGER WRAPPERS
+# LOGGER WRAPPERS
 # ============================================================
 
 safe_log_info()
@@ -310,8 +298,7 @@ load_module()
     fi
 
     #
-    # Не использовать subshell.
-    # Модуль должен загрузиться в текущий shell.
+    # Source into current shell.
     #
 
     if ! source "$file"
@@ -329,16 +316,14 @@ load_module()
 }
 
 # ============================================================
-# REQUIRE LIBRARY
+# REQUIRE LIB
 # ============================================================
 
 require_lib()
 {
-    local name="${1:-}"
-
     load_module \
         lib \
-        "$name" || return 1
+        "${1:-}" || return 1
 
     return 0
 }
@@ -349,11 +334,9 @@ require_lib()
 
 require_installer()
 {
-    local name="${1:-}"
-
     load_module \
         installer \
-        "$name" || return 1
+        "${1:-}" || return 1
 
     return 0
 }
@@ -405,9 +388,6 @@ check_arch_environment()
         printf '%s' "${ID:-}"
     )"
     then
-        bootstrap_output \
-            "ERROR: cannot read operating system ID"
-
         return 1
     fi
 
@@ -434,35 +414,35 @@ check_project_structure()
     bootstrap_output \
         "Checking project structure..."
 
-    local required_directory=""
+    local directory=""
 
-    for required_directory in \
+    for directory in \
         "$ROOT_DIR" \
         "$LIB_DIR" \
         "$INSTALLER_DIR"
     do
-        if [[ ! -d "$required_directory" ]]
+        if [[ ! -d "$directory" ]]
         then
             bootstrap_output \
-                "ERROR: required directory missing: ${required_directory}"
+                "ERROR: required directory missing: ${directory}"
 
             return 1
         fi
     done
 
-    local required_file=""
+    local file=""
 
-    for required_file in \
+    for file in \
         "${LIB_DIR}/logger.sh" \
         "${LIB_DIR}/config.sh" \
         "${LIB_DIR}/common.sh" \
         "${LIB_DIR}/colors.sh" \
         "${LIB_DIR}/tui.sh"
     do
-        if [[ ! -f "$required_file" ]]
+        if [[ ! -f "$file" ]]
         then
             bootstrap_output \
-                "ERROR: required file missing: ${required_file}"
+                "ERROR: required file missing: ${file}"
 
             return 1
         fi
@@ -581,7 +561,7 @@ check_dependencies()
 }
 
 # ============================================================
-# LOAD LOGGER
+# LOGGER
 # ============================================================
 
 load_logger()
@@ -628,45 +608,22 @@ load_logger()
 }
 
 # ============================================================
-# LOAD CORE LIBRARIES
+# CORE LIBRARIES
 # ============================================================
 
 load_core_libraries()
 {
-    bootstrap_output \
+    safe_log_info \
         "Loading core libraries..."
 
-    #
-    # logger уже должен быть загружен.
-    #
-
-    if ! declare -F logger_info >/dev/null 2>&1
-    then
-        bootstrap_output \
-            "ERROR: logger_info() is unavailable"
-
-        return 1
-    fi
-
-    require_lib \
-        "config.sh" || return 1
-
-    require_lib \
-        "common.sh" || return 1
-
-    require_lib \
-        "colors.sh" || return 1
-
-    require_lib \
-        "tui.sh" || return 1
-
-    #
-    # Проверяем colors_init после source colors.sh.
-    #
+    require_lib "config.sh" || return 1
+    require_lib "common.sh" || return 1
+    require_lib "colors.sh" || return 1
+    require_lib "tui.sh" || return 1
 
     if ! declare -F colors_init >/dev/null 2>&1
     then
-        logger_error \
+        safe_log_error \
             "colors_init() is unavailable"
 
         return 1
@@ -674,13 +631,13 @@ load_core_libraries()
 
     if ! colors_init
     then
-        logger_error \
+        safe_log_error \
             "colors_init() failed"
 
         return 1
     fi
 
-    logger_info \
+    safe_log_info \
         "Core libraries loaded"
 
     bootstrap_output \
@@ -785,14 +742,11 @@ detect_partition_table()
 {
     local table=""
 
-    if ! table="$(
+    table="$(
         config_get \
             PARTITION_TABLE \
-            2>/dev/null
+            2>/dev/null || true
     )"
-    then
-        table=""
-    fi
 
     if [[ -z "$table" ]]
     then
@@ -841,10 +795,6 @@ load_installer_modules()
 {
     safe_log_info \
         "Loading installer modules..."
-
-    #
-    # Stage modules.
-    #
 
     require_installer "welcome.sh" || return 1
     require_installer "keyboard.sh" || return 1
@@ -902,7 +852,7 @@ load_installer_modules()
     fi
 
     #
-    # menu_main MUST be loaded LAST.
+    # menu_main MUST be loaded last.
     #
 
     require_installer \
@@ -961,7 +911,7 @@ check_installer_api()
 }
 
 # ============================================================
-# SAVE ORIGINAL TERMINAL STATE
+# SAVE TERMINAL STATE
 # ============================================================
 
 save_original_terminal_state()
@@ -1044,10 +994,7 @@ app_init()
             "${APP_NAME} ${APP_VERSION}" || true
     fi
 
-    if declare -F tui_clear >/dev/null 2>&1
-    then
-        tui_clear || true
-    fi
+    tui_clear || true
 
     safe_log_info \
         "TUI started successfully"
@@ -1056,7 +1003,7 @@ app_init()
 }
 
 # ============================================================
-# STARTUP SCREEN
+# STARTUP
 # ============================================================
 
 draw_startup()
@@ -1066,33 +1013,17 @@ draw_startup()
         return 0
     fi
 
-    if ! tui_clear
-    then
-        return 1
-    fi
+    tui_clear || return 1
 
-    if declare -F titlebar_draw >/dev/null 2>&1
-    then
-        titlebar_draw \
-            "$APP_NAME" || return 1
-    fi
+    titlebar_draw \
+        "$APP_NAME" || return 1
 
-    tui_move \
-        5 \
-        5 || return 1
+    tui_move 5 5 || return 1
 
-    if declare -F color_info >/dev/null 2>&1
-    then
-        color_info \
-            "Arch Linux installation system" || return 1
-    else
-        tui_print \
-            "Arch Linux installation system" || return 1
-    fi
+    color_info \
+        "Arch Linux installation system" || return 1
 
-    tui_move \
-        7 \
-        5 || return 1
+    tui_move 7 5 || return 1
 
     tui_print \
         "Initializing installer..." || return 1
@@ -1200,10 +1131,6 @@ main()
     bootstrap_output \
         "Project root: ${ROOT_DIR}"
 
-    # --------------------------------------------------------
-    # STEP 1
-    # --------------------------------------------------------
-
     bootstrap_output \
         "STEP 1: check_root"
 
@@ -1217,10 +1144,6 @@ main()
             "STEP 1 RESULT: FAILED (${rc})"
         return "$rc"
     fi
-
-    # --------------------------------------------------------
-    # STEP 2
-    # --------------------------------------------------------
 
     bootstrap_output \
         "STEP 2: check_arch_environment"
@@ -1236,10 +1159,6 @@ main()
         return "$rc"
     fi
 
-    # --------------------------------------------------------
-    # STEP 3
-    # --------------------------------------------------------
-
     bootstrap_output \
         "STEP 3: check_project_structure"
 
@@ -1253,10 +1172,6 @@ main()
             "STEP 3 RESULT: FAILED (${rc})"
         return "$rc"
     fi
-
-    # --------------------------------------------------------
-    # STEP 4
-    # --------------------------------------------------------
 
     bootstrap_output \
         "STEP 4: check_terminal"
@@ -1272,10 +1187,6 @@ main()
         return "$rc"
     fi
 
-    # --------------------------------------------------------
-    # STEP 5
-    # --------------------------------------------------------
-
     bootstrap_output \
         "STEP 5: check_dependencies"
 
@@ -1289,10 +1200,6 @@ main()
             "STEP 5 RESULT: FAILED (${rc})"
         return "$rc"
     fi
-
-    # --------------------------------------------------------
-    # STEP 6
-    # --------------------------------------------------------
 
     bootstrap_output \
         "STEP 6: check_mountpoint"
@@ -1308,10 +1215,6 @@ main()
         return "$rc"
     fi
 
-    # --------------------------------------------------------
-    # STEP 7
-    # --------------------------------------------------------
-
     bootstrap_output \
         "STEP 7: load_logger"
 
@@ -1325,10 +1228,6 @@ main()
             "STEP 7 RESULT: FAILED (${rc})"
         return "$rc"
     fi
-
-    # --------------------------------------------------------
-    # STEP 8
-    # --------------------------------------------------------
 
     safe_log_info \
         "STEP 8: load_core_libraries"
@@ -1344,10 +1243,6 @@ main()
         return "$rc"
     fi
 
-    # --------------------------------------------------------
-    # STEP 9
-    # --------------------------------------------------------
-
     safe_log_info \
         "STEP 9: check_config_api"
 
@@ -1361,10 +1256,6 @@ main()
             "STEP 9 RESULT: FAILED (${rc})"
         return "$rc"
     fi
-
-    # --------------------------------------------------------
-    # STEP 10
-    # --------------------------------------------------------
 
     safe_log_info \
         "STEP 10: config_init_load"
@@ -1380,10 +1271,6 @@ main()
         return "$rc"
     fi
 
-    # --------------------------------------------------------
-    # STEP 11
-    # --------------------------------------------------------
-
     safe_log_info \
         "STEP 11: detect_boot_mode"
 
@@ -1397,10 +1284,6 @@ main()
             "STEP 11 RESULT: FAILED (${rc})"
         return "$rc"
     fi
-
-    # --------------------------------------------------------
-    # STEP 12
-    # --------------------------------------------------------
 
     safe_log_info \
         "STEP 12: detect_partition_table"
@@ -1416,10 +1299,6 @@ main()
         return "$rc"
     fi
 
-    # --------------------------------------------------------
-    # STEP 13
-    # --------------------------------------------------------
-
     safe_log_info \
         "STEP 13: load_installer_modules"
 
@@ -1433,10 +1312,6 @@ main()
             "STEP 13 RESULT: FAILED (${rc})"
         return "$rc"
     fi
-
-    # --------------------------------------------------------
-    # STEP 14
-    # --------------------------------------------------------
 
     safe_log_info \
         "STEP 14: check_installer_api"
@@ -1452,10 +1327,6 @@ main()
         return "$rc"
     fi
 
-    # --------------------------------------------------------
-    # STEP 15
-    # --------------------------------------------------------
-
     safe_log_info \
         "STEP 15: app_init"
 
@@ -1470,10 +1341,6 @@ main()
         return "$rc"
     fi
 
-    # --------------------------------------------------------
-    # STEP 16
-    # --------------------------------------------------------
-
     safe_log_info \
         "STEP 16: draw_startup"
 
@@ -1487,10 +1354,6 @@ main()
             "STEP 16 RESULT: FAILED (${rc})"
         return "$rc"
     fi
-
-    # --------------------------------------------------------
-    # STEP 17
-    # --------------------------------------------------------
 
     safe_log_info \
         "STEP 17: menu_main"

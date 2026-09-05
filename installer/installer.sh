@@ -367,71 +367,83 @@ else
     # FULL INSTALLATION
     # ========================================================
     installer_full_install()
-    {
-        local stage=""
-        local title=""
-        local rc=0
-        local index=0
-        local total="${#INSTALLER_STAGES[@]}"
+{
+    printf '%s\n' \
+        ">>> ENTER installer_full_install <<<" \
+        >/dev/tty 2>/dev/null || true
+
+    installer_log_info \
+        ">>> ENTER installer_full_install <<<"
+
+    local stage=""
+    local title=""
+    local rc=0
+    local index=0
+    local total="${#INSTALLER_STAGES[@]}"
+
+    installer_log_info \
+        "TOTAL STAGES=${total}"
+
+    installer_log_info \
+        "STAGE LIST=${INSTALLER_STAGES[*]}"
+
+    installer_log_info \
+        "FULL INSTALLATION STARTED"
+
+    if ! installer_check_all_stages
+    then
+        installer_log_error \
+            "Installer stage API check failed"
+
+        return 1
+    fi
+
+    for stage in "${INSTALLER_STAGES[@]}"
+    do
+        (( index += 1 ))
+
+        INSTALLER_STAGE="$stage"
+
+        if ! title="$(
+            installer_get_stage_title "$stage"
+        )"
+        then
+            title="$stage"
+        fi
+
         installer_log_info \
-            "========================================"
+            "STAGE ${index}/${total}: ${title}"
+
         installer_log_info \
-            "FULL INSTALLATION STARTED"
-        installer_log_info \
-            "Total stages: ${total}"
-        installer_log_info \
-            "========================================"
-        if ! installer_check_all_stages
+            "Stage ID: ${stage}"
+
+        if installer_run_stage "$stage"
+        then
+            rc=0
+        else
+            rc=$?
+        fi
+
+        if (( rc != 0 ))
         then
             installer_log_error \
-                "Installer stage API check failed"
-            return 1
+                "FULL INSTALLATION STOPPED"
+
+            installer_log_error \
+                "Failed stage: ${stage}"
+
+            installer_log_error \
+                "Return code: ${rc}"
+
+            return "$rc"
         fi
-        for stage in "${INSTALLER_STAGES[@]}"
-        do
-            (( index += 1 ))
-            INSTALLER_STAGE="$stage"
-            if ! title="$(
-                installer_get_stage_title "$stage"
-            )"
-            then
-                title="$stage"
-            fi
-            installer_log_info \
-                "========================================"
-            installer_log_info \
-                "STAGE ${index}/${total}: ${title}"
-            installer_log_info \
-                "Stage ID: ${stage}"
-            installer_log_info \
-                "========================================"
-            if installer_run_stage "$stage"
-            then
-                rc=0
-            else
-                rc=$?
-            fi
-            if (( rc != 0 ))
-            then
-                installer_log_error \
-                    "FULL INSTALLATION STOPPED"
-                installer_log_error \
-                    "Failed stage: ${stage}"
-                installer_log_error \
-                    "Return code: ${rc}"
-                return "$rc"
-            fi
-            installer_log_info \
-                "Stage ${index}/${total} completed successfully"
-        done
-        installer_log_info \
-            "========================================"
-        installer_log_info \
-            "FULL INSTALLATION COMPLETED SUCCESSFULLY"
-        installer_log_info \
-            "========================================"
-        return 0
-    }
+    done
+
+    installer_log_info \
+        "FULL INSTALLATION COMPLETED SUCCESSFULLY"
+
+    return 0
+}
     # ========================================================
     # GENERIC RUN
     # ========================================================

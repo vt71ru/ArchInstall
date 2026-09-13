@@ -81,6 +81,7 @@ logger_write()
 
     line="[${timestamp}] [${level}] ${message}"
 
+    # Запись во внутренний файловый дескриптор лога (если инициализирован)
     if (( LOGGER_INITIALIZED )) &&
        [[ -n "${LOGGER_FD:-}" ]]
     then
@@ -88,14 +89,18 @@ logger_write()
             "$line" \
             >&"$LOGGER_FD"
     else
+        # Резервная запись напрямую в файл при старте скрипта
         printf '%s\n' \
             "$line" \
             >> "$LOGGER_FILE"
     fi
 
+    # Вывод в stderr для пользователя: 
+    # Теперь уровень INFO дублируется наравне с WARN и ERROR,
+ # чтобы прогресс установки был виден в консоли без чтения файла.
     case "$level"
     in
-        WARN|ERROR)
+        INFO|WARN|ERROR)
             printf '%s\n' \
                 "$line" \
                 >&2
@@ -149,6 +154,7 @@ logger_init()
         return 1
     }
 
+    # Открываем файловый дескриптор для дозаписи, чтобы не открывать/закрывать файл каждый раз
     if ! exec {LOGGER_FD}>>"$LOGGER_FILE"
     then
         printf \
@@ -219,6 +225,7 @@ logger_close()
         INFO \
         "Logger shutting down"
 
+    # Закрываем сохраненный файловый дескриптор
     if [[ -n "${LOGGER_FD:-}" ]]
     then
         exec {LOGGER_FD}>&- || true

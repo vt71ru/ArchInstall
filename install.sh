@@ -14,11 +14,17 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 022
 
+# Детерминированный парсинг вывода системных утилит
+# (lsblk, blkid, parted, findmnt и т.п. в live-ISO могут
+# возвращать локализованные сообщения).
+export LC_ALL=C
+
 # ============================================================
 # APPLICATION
 # ============================================================
 
 readonly APP_NAME="Arch Installer"
+readonly APP_SLUG="arch-installer"
 readonly APP_VERSION="0.1.0"
 
 # ============================================================
@@ -37,6 +43,7 @@ WIDGETS_DIR=""
 
 LOGGER_READY=0
 TUI_READY=0
+TUI_INITIALIZED=0
 INSTALLER_EXITING=0
 
 TERMINAL_STATE_SAVED=0
@@ -98,11 +105,18 @@ INSTALLER_DIR="${ROOT_DIR}/installer"
 ASSETS_DIR="${ROOT_DIR}/assets"
 WIDGETS_DIR="${ROOT_DIR}/widgets"
 
+readonly ROOT_DIR
+readonly LIB_DIR
+readonly INSTALLER_DIR
+readonly ASSETS_DIR
+readonly WIDGETS_DIR
+
 export ROOT_DIR
 export LIB_DIR
 export INSTALLER_DIR
 export ASSETS_DIR
 export WIDGETS_DIR
+export LC_ALL
 
 # ============================================================
 # BOOTSTRAP OUTPUT
@@ -138,6 +152,12 @@ on_error()
     local function_name="${4:-main}"
     local command="${BASH_COMMAND:-unknown}"
     local i=0
+
+    # Не даём длинным подстановкам раздувать лог
+    if (( ${#command} > 200 ))
+    then
+        command="${command:0:200}..."
+    fi
 
     bootstrap_output ""
     bootstrap_output "============================================================"
@@ -297,10 +317,6 @@ load_module()
         return 1
     fi
 
-    #
-    # Source into current shell.
-    #
-
     if ! source "$file"
     then
         bootstrap_output \
@@ -316,7 +332,7 @@ load_module()
 }
 
 # ============================================================
-# REQUIRE LIB
+# REQUIRE LIB / INSTALLER
 # ============================================================
 
 require_lib()
@@ -328,15 +344,50 @@ require_lib()
     return 0
 }
 
-# ============================================================
-# REQUIRE INSTALLER
-# ============================================================
-
 require_installer()
 {
     load_module \
         installer \
         "${1:-}" || return 1
+
+    return 0
+}
+
+# ============================================================
+# REQUIRE FUNCTION HELPERS
+# ============================================================
+
+require_function()
+{
+    local function_name="${1:-}"
+
+    if [[ -z "$function_name" ]]
+    then
+        safe_log_error \
+            "require_function: empty function name"
+
+        return 1
+    fi
+
+    if ! declare -F "$function_name" >/dev/null 2>&1
+    then
+        safe_log_error \
+            "Required function missing: ${function_name}"
+
+        return 1
+    fi
+
+    return 0
+}
+
+require_functions()
+{
+    local function_name=""
+
+    for function_name in "$@"
+    do
+        require_function "$function_name" || return 1
+    done
 
     return 0
 }
@@ -395,6 +446,16 @@ check_arch_environment()
     then
         bootstrap_output \
             "Arch Linux check: FAILED"
+
+        return 1
+    fi
+
+    # Различаем live-ISO и установленную систему.
+    # Установщик должен запускаться только из live-среды.
+    if [[ ! -d /run/archiso ]] && [[ -z "${ARCHISO_ISO_LABEL:-}" ]]
+    then
+        bootstrap_output \
+            "Arch Linux check: FAILED (not a live ISO environment)"
 
         return 1
     fi
@@ -460,6 +521,9 @@ check_project_structure()
 
 check_mountpoint()
 {
+    bootstrap_output \
+        "Checking /mnt..."
+
     if [[ ! -d /mnt ]]
     then
         bootstrap_output \
@@ -467,6 +531,17 @@ check_mountpoint()
 
         return 1
     fi
+
+    if mountpoint -q /mnt 2>/dev/null
+    then
+        bootstrap_output \
+            "ERROR: /mnt is already mounted (resume or abort manually)"
+
+        return 1
+    fi
+
+    bootstrap_output \
+        "/mnt check: OK"
 
     return 0
 }
@@ -575,27 +650,11 @@ load_logger()
             "logger.sh" || return 1
     fi
 
-    if ! declare -F logger_info >/dev/null 2>&1
+    if ! require_functions \
+        logger_info \
+        logger_warn \
+        logger_error
     then
-        bootstrap_output \
-            "ERROR: logger_info() is unavailable"
-
-        return 1
-    fi
-
-    if ! declare -F logger_warn >/dev/null 2>&1
-    then
-        bootstrap_output \
-            "ERROR: logger_warn() is unavailable"
-
-        return 1
-    fi
-
-    if ! declare -F logger_error >/dev/null 2>&1
-    then
-        bootstrap_output \
-            "ERROR: logger_error() is unavailable"
-
         return 1
     fi
 
@@ -619,9 +678,9 @@ load_core_libraries()
     require_lib "config.sh" || return 1
     require_lib "common.sh" || return 1
     require_lib "colors.sh" || return 1
-    require_lib "tui.sh" || return 1
+    require_lib "tui.sh"    || return 1
 
-    if ! declare -F colors_init >/dev/null 2>&1
+    if ! require_function colors_init
     then
         safe_log_error \
             "colors_init() is unavailable"
@@ -655,22 +714,17 @@ check_config_api()
     safe_log_info \
         "Checking CONFIG API"
 
-    local function_name=""
-
-    for function_name in \
+    if ! require_functions \
         config_init \
         config_get \
         config_set \
         config_save
-    do
-        if ! declare -F "$function_name" >/dev/null 2>&1
-        then
-            safe_log_error \
-                "CONFIG API function missing: ${function_name}"
+    then
+        safe_log_error \
+            "CONFIG API incomplete"
 
-            return 1
-        fi
-    done
+        return 1
+    fi
 
     safe_log_info \
         "CONFIG API: OK"
@@ -791,80 +845,57 @@ detect_partition_table()
 # LOAD INSTALLER MODULES
 # ============================================================
 
+# (имя_модуля, обязательные_функции...)
+load_installer_module()
+{
+    local module="${1:-}"
+
+    shift || true
+
+    require_installer "$module" || return 1
+    require_functions "$@"       || return 1
+
+    return 0
+}
+
 load_installer_modules()
 {
     safe_log_info \
         "Loading installer modules..."
 
-    require_installer "welcome.sh" || return 1
-    require_installer "keyboard.sh" || return 1
-    require_installer "locale.sh" || return 1
-    require_installer "locale_generate.sh" || return 1
-    require_installer "network.sh" || return 1
-    require_installer "mirrors.sh" || return 1
-    require_installer "disks.sh" || return 1
-    require_installer "partition.sh" || return 1
-    require_installer "filesystem.sh" || return 1
-    require_installer "mount.sh" || return 1
-    require_installer "packages.sh" || return 1
-    require_installer "users.sh" || return 1
-    require_installer "desktop.sh" || return 1
-    require_installer "services.sh" || return 1
-    require_installer "bootloader.sh" || return 1
-    require_installer "summary.sh" || return 1
+    load_installer_module "welcome.sh"          welcome_run          || return 1
+    load_installer_module "keyboard.sh"         keyboard_run         || return 1
+    load_installer_module "locale.sh"           locale_run           || return 1
+    load_installer_module "locale_generate.sh"  locale_generate_run  || return 1
+    load_installer_module "network.sh"          network_run          || return 1
+    load_installer_module "mirrors.sh"          mirrors_run          || return 1
+    load_installer_module "disks.sh"            disks_run            || return 1
+    load_installer_module "partition.sh"        partition_run        || return 1
+    load_installer_module "filesystem.sh"       filesystem_run       || return 1
+    load_installer_module "mount.sh"            mount_run            || return 1
+    load_installer_module "packages.sh"         packages_run         || return 1
+    load_installer_module "users.sh"            users_run            || return 1
+    load_installer_module "desktop.sh"          desktop_run          || return 1
+    load_installer_module "services.sh"         services_run         || return 1
+    load_installer_module "bootloader.sh"       bootloader_run       || return 1
+    load_installer_module "summary.sh"          summary_run          || return 1
 
-    #
-    # Controller MUST be loaded before menu.
-    #
+    # Контроллер ДО menu_main.sh.
+    load_installer_module \
+        "installer.sh" \
+        installer_run \
+        installer_full_install \
+        installer_run_stage \
+        installer_check_stage \
+        installer_check_all_stages \
+        installer_get_stage_function \
+        installer_get_stage_title \
+        installer_start_menu \
+        installer_main \
+        || return 1
 
-    require_installer "installer.sh" || return 1
-
-    if ! declare -F installer_full_install >/dev/null 2>&1
-    then
-        safe_log_error \
-            "installer_full_install() is unavailable"
-
-        return 1
-    fi
-
-    if ! declare -F installer_run_stage >/dev/null 2>&1
-    then
-        safe_log_error \
-            "installer_run_stage() is unavailable"
-
-        return 1
-    fi
-
-    if ! declare -F installer_get_stage_title >/dev/null 2>&1
-    then
-        safe_log_error \
-            "installer_get_stage_title() is unavailable"
-
-        return 1
-    fi
-
-    if ! declare -F installer_check_all_stages >/dev/null 2>&1
-    then
-        safe_log_error \
-            "installer_check_all_stages() is unavailable"
-
-        return 1
-    fi
-
-    #
-    # menu_main MUST be loaded last.
-    #
-
-    require_installer \
-        "menu_main.sh" || return 1
-
-    if ! declare -F menu_main >/dev/null 2>&1
-    then
-        safe_log_error \
-            "menu_main() is unavailable"
-
-        return 1
-    fi
+    # menu_main.sh — последним.
+    load_installer_module "menu_main.sh" menu_main || return 1
 
     safe_log_info \
         "Installer modules loaded"
@@ -881,9 +912,7 @@ check_installer_api()
     safe_log_info \
         "Checking installer API"
 
-    local required_function=""
-
-    for required_function in \
+    if ! require_functions \
         installer_run \
         installer_full_install \
         installer_run_stage \
@@ -894,15 +923,12 @@ check_installer_api()
         installer_start_menu \
         installer_main \
         menu_main
-    do
-        if ! declare -F "$required_function" >/dev/null 2>&1
-        then
-            safe_log_error \
-                "Installer API function missing: ${required_function}"
+    then
+        safe_log_error \
+            "Installer API incomplete"
 
-            return 1
-        fi
-    done
+        return 1
+    fi
 
     safe_log_info \
         "Installer API: OK"
@@ -918,6 +944,7 @@ save_original_terminal_state()
 {
     if [[ ! -e /dev/tty ]]
     then
+        TERMINAL_STATE_SAVED=0
         return 1
     fi
 
@@ -946,18 +973,10 @@ app_init()
     safe_log_info \
         "Initializing application"
 
-    if ! declare -F tui_init >/dev/null 2>&1
+    if ! require_functions tui_init tui_start
     then
         safe_log_error \
-            "tui_init() unavailable"
-
-        return 1
-    fi
-
-    if ! declare -F tui_start >/dev/null 2>&1
-    then
-        safe_log_error \
-            "tui_start() unavailable"
+            "TUI API incomplete"
 
         return 1
     fi
@@ -974,6 +993,8 @@ app_init()
 
         return 1
     fi
+
+    TUI_INITIALIZED=1
 
     safe_log_info \
         "Starting TUI..."
@@ -1015,20 +1036,28 @@ draw_startup()
 
     tui_clear || return 1
 
-    titlebar_draw \
-        "$APP_NAME" || return 1
+    if declare -F titlebar_draw >/dev/null 2>&1
+    then
+        titlebar_draw "$APP_NAME" || return 1
+    fi
 
     tui_move 5 5 || return 1
 
-    color_info \
-        "Arch Linux installation system" || return 1
+    if declare -F color_info >/dev/null 2>&1
+    then
+        color_info \
+            "Arch Linux installation system" || return 1
+    fi
 
     tui_move 7 5 || return 1
 
     tui_print \
         "Initializing installer..." || return 1
 
-    screen_refresh 2>/dev/null || true
+    if declare -F screen_refresh >/dev/null 2>&1
+    then
+        screen_refresh 2>/dev/null || true
+    fi
 
     return 0
 }
@@ -1039,11 +1068,15 @@ draw_startup()
 
 cleanup()
 {
+    # Внутри cleanup отключаем set -e, чтобы ни одна
+    # промежуточная ошибка не «съела» оригинальный rc.
     local rc=$?
+
+    set +e
 
     INSTALLER_EXITING=1
 
-    if declare -F tui_restore >/dev/null 2>&1
+    if declare -F tui_restore >/dev/null 2>&1 && (( TUI_INITIALIZED != 0 ))
     then
         tui_restore || true
     fi
@@ -1085,6 +1118,7 @@ cleanup()
 
     LOGGER_READY=0
     TUI_READY=0
+    TUI_INITIALIZED=0
 
     return "$rc"
 }
@@ -1094,7 +1128,7 @@ cleanup()
 # ============================================================
 
 # Явно игнорируем SIGPIPE. Если потребитель данных в пайпе завершается,
-# записывающая команда получит SIGPIPE. Мы не даем ей убить скрипт аварийно,
+# записывающая команда получит SIGPIPE. Мы не даём ей убить скрипт аварийно,
 # позволяя set -e и set -o pipefail обработать ненулевой код возврата (141).
 trap '' PIPE
 
@@ -1110,17 +1144,91 @@ trap '
     exit "$rc"
 ' ERR
 
-trap '
-    rc=$?
-    on_sigint || true
-    exit "$rc"
-' INT
+trap 'on_sigint;  exit 130' INT
+trap 'on_sigterm; exit 143' TERM
 
-trap '
+# ============================================================
+# RUN STEP (универсальный шаг)
+# ============================================================
+
+run_step()
+{
+    local number="${1:-?}"
+    local name="${2:-unknown}"
+
+    shift 2 || true
+
+    bootstrap_output \
+        "STEP ${number}: ${name}"
+
+    if "$@"
+    then
+        bootstrap_output \
+            "STEP ${number} RESULT: OK"
+
+        safe_log_info \
+            "STEP ${number} (${name}): OK"
+
+        return 0
+    fi
+
+    local rc=$?
+
+    bootstrap_output \
+        "STEP ${number} RESULT: FAILED (${rc})"
+
+    safe_log_error \
+        "STEP ${number} (${name}): FAILED (${rc})"
+
+    return "$rc"
+}
+
+# ============================================================
+# MENU WRAPPER
+# ============================================================
+
+# Интерактивное меню может вызывать любые команды
+# (grep, tput, ...), которые легально возвращают != 0.
+# На время работы menu_main отключаем set -e и ERR-trap,
+# чтобы установщик не умирал от безобидной команды.
+run_main_menu()
+{
+    local rc=0
+    local had_e=0
+    local had_pipefail=0
+
+    if [[ "$-" == *e* ]]
+    then
+        had_e=1
+    fi
+
+    if shopt -qo pipefail
+    then
+        had_pipefail=1
+    fi
+
+    set +e
+    set +o pipefail
+    trap - ERR
+
+    menu_main "$@"
     rc=$?
-    on_sigterm || true
-    exit "$rc"
-' TERM
+
+    trap '
+        rc=$?
+        on_error \
+            "$rc" \
+            "$LINENO" \
+            "${BASH_SOURCE[0]}" \
+            "${FUNCNAME[1]:-main}" || true
+        exit "$rc"
+    ' ERR
+
+    (( had_pipefail != 0 )) && set -o pipefail
+    (( had_e != 0 ))        && set -e
+
+    return "$rc"
+}
 
 # ============================================================
 # MAIN
@@ -1128,242 +1236,42 @@ trap '
 
 main()
 {
-    local rc=0
-
     bootstrap_output \
         "${APP_NAME} ${APP_VERSION}"
 
     bootstrap_output \
         "Project root: ${ROOT_DIR}"
 
-    bootstrap_output \
-        "STEP 1: check_root"
+    run_step 1  check_root             || return $?
+    run_step 2  check_arch_environment || return $?
+    run_step 3  check_project_structure || return $?
+    run_step 4  check_terminal         || return $?
+    run_step 5  check_dependencies     || return $?
+    run_step 6  check_mountpoint       || return $?
 
-    if check_root
-    then
-        bootstrap_output \
-            "STEP 1 RESULT: OK"
-    else
-        rc=$?
-        bootstrap_output \
-            "STEP 1 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
-
-    bootstrap_output \
-        "STEP 2: check_arch_environment"
-
-    if check_arch_environment
-    then
-        bootstrap_output \
-            "STEP 2 RESULT: OK"
-    else
-        rc=$?
-        bootstrap_output \
-            "STEP 2 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
-
-    bootstrap_output \
-        "STEP 3: check_project_structure"
-
-    if check_project_structure
-    then
-        bootstrap_output \
-            "STEP 3 RESULT: OK"
-    else
-        rc=$?
-        bootstrap_output \
-            "STEP 3 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
-
-    bootstrap_output \
-        "STEP 4: check_terminal"
-
-    if check_terminal
-    then
-        bootstrap_output \
-            "STEP 4 RESULT: OK"
-    else
-        rc=$?
-        bootstrap_output \
-            "STEP 4 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
-
-    bootstrap_output \
-        "STEP 5: check_dependencies"
-
-    if check_dependencies
-    then
-        bootstrap_output \
-            "STEP 5 RESULT: OK"
-    else
-        rc=$?
-        bootstrap_output \
-            "STEP 5 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
-
-    bootstrap_output \
-        "STEP 6: check_mountpoint"
-
-    if check_mountpoint
-    then
-        bootstrap_output \
-            "STEP 6 RESULT: OK"
-    else
-        rc=$?
-        bootstrap_output \
-            "STEP 6 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
-
-    bootstrap_output \
-        "STEP 7: load_logger"
-
-    if load_logger
-    then
-        bootstrap_output \
-            "STEP 7 RESULT: OK"
-    else
-        rc=$?
-        bootstrap_output \
-            "STEP 7 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
+    # Переигрываем пре-логгерные шаги в лог,
+    # чтобы они тоже остались в истории.
+    run_step 7  load_logger            || return $?
 
     safe_log_info \
-        "STEP 8: load_core_libraries"
+        "Pre-logger steps 1..6 completed successfully"
 
-    if load_core_libraries
-    then
-        safe_log_info \
-            "STEP 8 RESULT: OK"
-    else
-        rc=$?
-        safe_log_error \
-            "STEP 8 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
-
-    safe_log_info \
-        "STEP 9: check_config_api"
-
-    if check_config_api
-    then
-        safe_log_info \
-            "STEP 9 RESULT: OK"
-    else
-        rc=$?
-        safe_log_error \
-            "STEP 9 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
+    run_step 8  load_core_libraries    || return $?
+    run_step 9  check_config_api       || return $?
+    run_step 10 config_init_load       || return $?
+    run_step 11 detect_boot_mode       || return $?
+    run_step 12 detect_partition_table || return $?
+    run_step 13 load_installer_modules || return $?
+    run_step 14 check_installer_api    || return $?
+    run_step 15 app_init               || return $?
+    run_step 16 draw_startup           || return $?
 
     safe_log_info \
-        "STEP 10: config_init_load"
+        "Entering main menu"
 
-    if config_init_load
-    then
-        safe_log_info \
-            "STEP 10 RESULT: OK"
-    else
-        rc=$?
-        safe_log_error \
-            "STEP 10 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
+    local rc=0
 
-    safe_log_info \
-        "STEP 11: detect_boot_mode"
-
-    if detect_boot_mode
-    then
-        safe_log_info \
-            "STEP 11 RESULT: OK"
-    else
-        rc=$?
-        safe_log_error \
-            "STEP 11 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
-
-    safe_log_info \
-        "STEP 12: detect_partition_table"
-
-    if detect_partition_table
-    then
-        safe_log_info \
-            "STEP 12 RESULT: OK"
-    else
-        rc=$?
-        safe_log_error \
-            "STEP 12 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
-
-    safe_log_info \
-        "STEP 13: load_installer_modules"
-
-    if load_installer_modules
-    then
-        safe_log_info \
-            "STEP 13 RESULT: OK"
-    else
-        rc=$?
-        safe_log_error \
-            "STEP 13 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
-
-    safe_log_info \
-        "STEP 14: check_installer_api"
-
-    if check_installer_api
-    then
-        safe_log_info \
-            "STEP 14 RESULT: OK"
-    else
-        rc=$?
-        safe_log_error \
-            "STEP 14 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
-
-    safe_log_info \
-        "STEP 15: app_init"
-
-    if app_init
-    then
-        safe_log_info \
-            "STEP 15 RESULT: OK"
-    else
-        rc=$?
-        safe_log_error \
-            "STEP 15 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
-
-    safe_log_info \
-        "STEP 16: draw_startup"
-
-    if draw_startup
-    then
-        safe_log_info \
-            "STEP 16 RESULT: OK"
-    else
-        rc=$?
-        safe_log_error \
-            "STEP 16 RESULT: FAILED (${rc})"
-        return "$rc"
-    fi
-
-    safe_log_info \
-        "STEP 17: menu_main"
-
-    if menu_main "$@"
+    if run_main_menu "$@"
     then
         rc=0
     else

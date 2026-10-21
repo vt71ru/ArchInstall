@@ -1155,6 +1155,7 @@ run_step()
 {
     local number="${1:-?}"
     local name="${2:-unknown}"
+    local rc=0
 
     shift 2 || true
 
@@ -1170,9 +1171,9 @@ run_step()
             "STEP ${number} (${name}): OK"
 
         return 0
+    else
+        rc=$?
     fi
-
-    local rc=$?
 
     bootstrap_output \
         "STEP ${number} RESULT: FAILED (${rc})"

@@ -435,8 +435,6 @@ check_arch_environment()
 
     local os_id=""
 
-    # Читаем /etc/os-release в текущем шелле (файл безопасен,
-    # но всё равно ограничиваемся одним субшеллом для чистоты).
     os_id="$(
         . /etc/os-release
         printf '%s' "${ID:-}"
@@ -1137,3 +1135,176 @@ trap cleanup EXIT
 
 trap '
     rc=$?
+    on_error \
+        "$rc" \
+        "$LINENO" \
+        "${BASH_SOURCE[0]}" \
+        "${FUNCNAME[1]:-main}" || true
+    exit "$rc"
+' ERR
+
+trap 'on_sigint;  exit 130' INT
+trap 'on_sigterm; exit 143' TERM
+
+# ============================================================
+# RUN STEP (универсальный шаг)
+# ============================================================
+
+run_step()
+{
+    local number="${1:-?}"
+    local name="${2:-unknown}"
+    local rc=0
+
+    shift 2 || true
+
+    bootstrap_output \
+        "STEP ${number}: ${name}"
+
+    if "$@"
+    then
+        bootstrap_output \
+            "STEP ${number} RESULT: OK"
+
+        safe_log_info \
+            "STEP ${number} (${name}): OK"
+
+        return 0
+    else
+        rc=$?
+    fi
+
+    bootstrap_output \
+        "STEP ${number} RESULT: FAILED (${rc})"
+
+    safe_log_error \
+        "STEP ${number} (${name}): FAILED (${rc})"
+
+    return "$rc"
+}
+
+# ============================================================
+# MENU WRAPPER
+# ============================================================
+
+# Интерактивное меню может вызывать любые команды
+# (grep, tput, ...), которые легально возвращают != 0.
+# На время работы menu_main отключаем set -e и ERR-trap,
+# чтобы установщик не умирал от безобидной команды.
+run_main_menu()
+{
+    local rc=0
+    local had_e=0
+    local had_pipefail=0
+
+    if [[ "$-" == *e* ]]
+    then
+        had_e=1
+    fi
+
+    if shopt -qo pipefail
+    then
+        had_pipefail=1
+    fi
+
+    set +e
+    set +o pipefail
+    trap - ERR
+
+    menu_main "$@"
+    rc=$?
+
+    trap '
+        rc=$?
+        on_error \
+            "$rc" \
+            "$LINENO" \
+            "${BASH_SOURCE[0]}" \
+            "${FUNCNAME[1]:-main}" || true
+        exit "$rc"
+    ' ERR
+
+    # ВАЖНО: используем if, а не "(( ... )) && cmd",
+    # иначе при ложном условии compound вернёт 1
+    # и set -e убьёт скрипт.
+    if (( had_pipefail != 0 ))
+    then
+        set -o pipefail
+    fi
+
+    if (( had_e != 0 ))
+    then
+        set -e
+    fi
+
+    return "$rc"
+}
+
+# ============================================================
+# MAIN
+# ============================================================
+
+main()
+{
+    bootstrap_output \
+        "${APP_NAME} ${APP_VERSION}"
+
+    bootstrap_output \
+        "Project root: ${ROOT_DIR}"
+
+    run_step 1  check_root             || return $?
+    run_step 2  check_arch_environment || return $?
+    run_step 3  check_project_structure || return $?
+    run_step 4  check_terminal         || return $?
+    run_step 5  check_dependencies     || return $?
+    run_step 6  check_mountpoint       || return $?
+
+    # Переигрываем пре-логгерные шаги в лог,
+    # чтобы они тоже остались в истории.
+    run_step 7  load_logger            || return $?
+
+    safe_log_info \
+        "Pre-logger steps 1..6 completed successfully"
+
+    run_step 8  load_core_libraries    || return $?
+    run_step 9  check_config_api       || return $?
+    run_step 10 config_init_load       || return $?
+    run_step 11 detect_boot_mode       || return $?
+    run_step 12 detect_partition_table || return $?
+    run_step 13 load_installer_modules || return $?
+    run_step 14 check_installer_api    || return $?
+    run_step 15 app_init               || return $?
+    run_step 16 draw_startup           || return $?
+
+    safe_log_info \
+        "Entering main menu"
+
+    local rc=0
+
+    if run_main_menu "$@"
+    then
+        rc=0
+    else
+        rc=$?
+    fi
+
+    safe_log_info \
+        "menu_main returned rc=${rc}"
+
+    return "$rc"
+}
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]
+then
+    if main "$@"
+    then
+        exit 0
+    else
+        rc=$?
+        exit "$rc"
+    fi
+fi

@@ -15,8 +15,6 @@ IFS=$'\n\t'
 umask 022
 
 # Детерминированный парсинг вывода системных утилит
-# (lsblk, blkid, parted, findmnt и т.п. в live-ISO могут
-# возвращать локализованные сообщения).
 export LC_ALL=C
 
 # ============================================================
@@ -124,8 +122,7 @@ export LC_ALL
 
 bootstrap_output()
 {
-    # Склеиваем все аргументы: функции часто вызывают
-    # bootstrap_output с несколькими фрагментами строки.
+    # FIX: склеиваем все аргументы, иначе второй теряется
     local message="$*"
 
     if [[ -e /dev/tty ]]
@@ -155,7 +152,6 @@ on_error()
     local command="${BASH_COMMAND:-unknown}"
     local i=0
 
-    # Не даём длинным подстановкам раздувать лог
     if (( ${#command} > 200 ))
     then
         command="${command:0:200}..."
@@ -270,6 +266,8 @@ load_module()
     local name="${2:-}"
     local directory=""
     local file=""
+    local src_rc=0
+    local had_e=0
 
     case "$kind"
     in
@@ -318,10 +316,40 @@ load_module()
         return 1
     fi
 
-    if ! source "$file"
+    # FIX: на время source отключаем set -e и ERR-trap,
+    # чтобы безобидная команда внутри модуля
+    # (grep, declare -n на старом bash, и т.п.)
+    # не убила весь установщик через trap ERR.
+    if [[ "$-" == *e* ]]
+    then
+        had_e=1
+    fi
+
+    set +e
+    trap - ERR
+
+    source "$file"
+    src_rc=$?
+
+    trap '
+        rc=$?
+        on_error \
+            "$rc" \
+            "$LINENO" \
+            "${BASH_SOURCE[0]}" \
+            "${FUNCNAME[1]:-main}" || true
+        exit "$rc"
+    ' ERR
+
+    if (( had_e != 0 ))
+    then
+        set -e
+    fi
+
+    if (( src_rc != 0 ))
     then
         bootstrap_output \
-            "ERROR: failed to source: ${file}"
+            "ERROR: failed to source: ${file} (rc=${src_rc})"
 
         return 1
     fi
@@ -448,8 +476,6 @@ check_arch_environment()
         return 1
     fi
 
-    # Различаем live-ISO и установленную систему.
-    # Установщик должен запускаться только из live-среды.
     if [[ ! -d /run/archiso ]] && [[ -z "${ARCHISO_ISO_LABEL:-}" ]]
     then
         bootstrap_output \
@@ -843,7 +869,6 @@ detect_partition_table()
 # LOAD INSTALLER MODULES
 # ============================================================
 
-# (имя_модуля, обязательные_функции...)
 load_installer_module()
 {
     local module="${1:-}"
@@ -1066,8 +1091,6 @@ draw_startup()
 
 cleanup()
 {
-    # Внутри cleanup отключаем set -e, чтобы ни одна
-    # промежуточная ошибка не «съела» оригинальный rc.
     local rc=$?
 
     set +e
@@ -1125,10 +1148,6 @@ cleanup()
 # TRAPS
 # ============================================================
 
-# Явно игнорируем SIGPIPE: записывающая сторона в пайпе
-# не должна аварийно убивать скрипт. Реальные ошибки пайпа
-# всё равно будут видны через set -o pipefail (код 141
-# либо код ошибки записи).
 trap '' PIPE
 
 trap cleanup EXIT
@@ -1147,7 +1166,7 @@ trap 'on_sigint;  exit 130' INT
 trap 'on_sigterm; exit 143' TERM
 
 # ============================================================
-# RUN STEP (универсальный шаг)
+# RUN STEP
 # ============================================================
 
 run_step()
@@ -1187,15 +1206,19 @@ run_step()
 # MENU WRAPPER
 # ============================================================
 
-# Интерактивное меню может вызывать любые команды
-# (grep, tput, ...), которые легально возвращают != 0.
-# На время работы menu_main отключаем set -e и ERR-trap,
-# чтобы установщик не умирал от безобидной команды.
 run_main_menu()
 {
     local rc=0
     local had_e=0
     local had_pipefail=0
+
+    # FIX: явная проверка, что menu_main загружена
+    if ! declare -F menu_main >/dev/null 2>&1
+    then
+        safe_log_error \
+            "run_main_menu: menu_main is NOT defined (menu_main.sh not loaded or failed to source)"
+        return 1
+    fi
 
     if [[ "$-" == *e* ]]
     then
@@ -1224,7 +1247,7 @@ run_main_menu()
         exit "$rc"
     ' ERR
 
-    # ВАЖНО: используем if, а не "(( ... )) && cmd",
+    # FIX: используем if, а не "(( ... )) && cmd",
     # иначе при ложном условии compound вернёт 1
     # и set -e убьёт скрипт.
     if (( had_pipefail != 0 ))
@@ -1252,29 +1275,36 @@ main()
     bootstrap_output \
         "Project root: ${ROOT_DIR}"
 
-    run_step 1  check_root             || return $?
-    run_step 2  check_arch_environment || return $?
+    run_step 1  check_root              || return $?
+    run_step 2  check_arch_environment  || return $?
     run_step 3  check_project_structure || return $?
-    run_step 4  check_terminal         || return $?
-    run_step 5  check_dependencies     || return $?
-    run_step 6  check_mountpoint       || return $?
+    run_step 4  check_terminal          || return $?
+    run_step 5  check_dependencies      || return $?
+    run_step 6  check_mountpoint        || return $?
 
-    # Переигрываем пре-логгерные шаги в лог,
-    # чтобы они тоже остались в истории.
-    run_step 7  load_logger            || return $?
+    run_step 7  load_logger             || return $?
 
     safe_log_info \
         "Pre-logger steps 1..6 completed successfully"
 
-    run_step 8  load_core_libraries    || return $?
-    run_step 9  check_config_api       || return $?
-    run_step 10 config_init_load       || return $?
-    run_step 11 detect_boot_mode       || return $?
-    run_step 12 detect_partition_table || return $?
-    run_step 13 load_installer_modules || return $?
-    run_step 14 check_installer_api    || return $?
-    run_step 15 app_init               || return $?
-    run_step 16 draw_startup           || return $?
+    run_step 8  load_core_libraries     || return $?
+    run_step 9  check_config_api        || return $?
+    run_step 10 config_init_load        || return $?
+    run_step 11 detect_boot_mode        || return $?
+    run_step 12 detect_partition_table  || return $?
+    run_step 13 load_installer_modules  || return $?
+    run_step 14 check_installer_api     || return $?
+    run_step 15 app_init                || return $?
+    run_step 16 draw_startup            || return $?
+
+    # FIX: ещё одна проверка перед меню — чтобы вместо
+    # "command not found" была внятная ошибка.
+    if ! declare -F menu_main >/dev/null 2>&1
+    then
+        safe_log_error \
+            "menu_main is not defined before entering main menu"
+        return 1
+    fi
 
     safe_log_info \
         "Entering main menu"

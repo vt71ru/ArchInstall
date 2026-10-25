@@ -1,4 +1,36 @@
-warn "/etc/os-release is unavailable"
+#!/usr/bin/env bash
+# arch-installer-preflight.sh
+# Safe preflight for developing a Bash-based Arch Linux installer.
+# Does not install packages, modify networking, create repositories, or touch disks.
+
+set -uo pipefail
+
+readonly SCRIPT_NAME="${0##*/}"
+
+section() {
+    printf '\n=== %s ===\n' "$1"
+}
+
+ok()   { printf '[OK]   %s\n' "$1"; }
+warn() { printf '[WARN] %s\n' "$1"; }
+fail() { printf '[FAIL] %s\n' "$1"; }
+
+have_cmd() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+section "1. Operating system and shell"
+
+printf 'Script: %s\n' "$SCRIPT_NAME"
+printf 'User:   %s\n' "$(id -un 2>/dev/null || printf unknown)"
+printf 'Shell:  %s\n' "${BASH_VERSION:-not running under Bash}"
+
+if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    printf 'OS:     %s\n' "${PRETTY_NAME:-unknown}"
+else
+    warn "/etc/os-release is unavailable"
 fi
 
 if [[ "${BASH_VERSION:-}" ]]; then
